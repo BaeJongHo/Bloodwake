@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem -Force -Path \"C:\\\\Users\\\\user\\\\Desktop\\\\Unreal_Harness\" | Select-Object Name, Mode, Length; Write-Output \"---GIT---\"; git -C \"C:\\\\Users\\\\user\\\\Desktop\\\\Unreal_Harness\" status 2>&1 | Select-Object -First 5; Write-Output \"---GH---\"; \\(Get-Command gh -ErrorAction SilentlyContinue\\).Source)",
+      "PowerShell(git -C $repo init -b main)",
+      "PowerShell(git -C $repo config user.name \"BaeJongHo\")",
+      "PowerShell(git -C $repo config user.email \"BaeJongHo@users.noreply.github.com\")",
+      "PowerShell(git -C $repo remote add origin https://github.com/BaeJongHo/Unreal_Harness.git)",
+      "PowerShell(git -C $repo fetch origin)",
+      "PowerShell(git -C $repo reset --soft origin/main)",
+      "PowerShell(git -C $repo status --short)",
+      "PowerShell($repo = \"C:\\\\Users\\\\user\\\\Desktop\\\\Unreal_Harness\")",
+      "PowerShell($root=\"C:\\\\Bloodwake\\\\Bloodwake\"; \"gitignore exists: \" + \\(Test-Path \"$root\\\\.gitignore\"\\); \"git dir exists: \" + \\(Test-Path \"$root\\\\.git\"\\); \"--- uproject ---\"; Get-Content \"$root\\\\Bloodwake.uproject\"; \"--- Source ---\"; Get-ChildItem \"$root\\\\Source\" -Recurse -File | Select-Object -ExpandProperty Name)"
+    ]
+  }
+}

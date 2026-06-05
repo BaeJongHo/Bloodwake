@@ -1,0 +1,69 @@
+# ============================================================
+# Unreal Engine 5 .gitignore (Bloodwake)
+# ============================================================
+
+# --- Build / 생성 산출물 (절대 커밋 금지) ---
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+Build/
+
+# --- IDE / 에디터 메타데이터 ---
+.vs/
+.vsconfig
+.idea/
+.vscode/
+*.VC.db
+*.VC.opendb
+*.opensdf
+*.sdf
+*.suo
+*.sln.docstates
+
+# --- Visual Studio / Rider 생성 프로젝트 파일 ---
+*.sln
+*.xcodeproj
+*.xcworkspace
+*.workspace
+
+# --- 컴파일 산출물 ---
+*.obj
+*.o
+*.pdb
+*.pch
+*.exe
+*.dll
+*.lib
+*.exp
+*.app
+*.ipa
+
+# --- 패키징 / 배포 출력 ---
+[Bb]uild/
+[Bb]uilds/
+Packaged/
+
+# --- 자동 생성 헤더/소스 ---
+*.generated.h
+*.gen.cpp
+
+# --- 크래시 / 로그 ---
+*.log
+*.dmp
+
+# --- OS 부산물 ---
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# ============================================================
+# 추적해야 하는 항목 (예외 — 위 규칙에 걸려도 강제 포함)
+# ============================================================
+!Config/**
+!Content/**
+!Source/**
+!*.uproject
+!*.Build.cs
+!*.Target.cs
