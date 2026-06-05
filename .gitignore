@@ -52,6 +52,12 @@ Packaged/
 *.log
 *.dmp
 
+# --- Claude Code 관련 (저장소 제외) ---
+.claude/
+docs/
+Feature/
+CLAUDE.md
+
 # --- OS 부산물 ---
 Thumbs.db
 ehthumbs.db
