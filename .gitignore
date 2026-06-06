@@ -58,6 +58,9 @@ docs/
 Feature/
 CLAUDE.md
 
+# --- 블로그 글 (로컬 작성물 — 저장소 제외) ---
+Blog/
+
 # --- Unreal MCP 서버 관련 (저장소 제외) ---
 # MCP 클라이언트 설정 (로컬 경로 포함 — 머신마다 다름)
 .mcp.json

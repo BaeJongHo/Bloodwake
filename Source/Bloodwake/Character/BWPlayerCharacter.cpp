@@ -81,6 +81,13 @@ void ABWPlayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputC
 		{
 			EnhancedInput->BindAction(LookAction, ETriggerEvent::Triggered, this, &ABWPlayerCharacter::Look);
 		}
+
+		if (JumpAction)
+		{
+			// 점프는 ACharacter 내장 구현을 사용한다. 누름(Started)에 점프 시작, 뗌(Completed)에 점프 종료.
+			EnhancedInput->BindAction(JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
+			EnhancedInput->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
+		}
 	}
 }
 

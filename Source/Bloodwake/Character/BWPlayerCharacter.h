@@ -58,4 +58,7 @@ protected:
 
 	UPROPERTY(EditAnywhere)
 	TObjectPtr<UInputAction> LookAction;
+
+	UPROPERTY(EditAnywhere)
+	TObjectPtr<UInputAction> JumpAction;
 };
