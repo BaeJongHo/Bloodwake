@@ -1,7 +1,6 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
-
-#include "BWPlayerCharacter.h"
+#include "Character/BWPlayerCharacter.h"
 
 #include "Camera/CameraComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -9,6 +8,7 @@
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
+#include "Combat/BWAttributeComponent.h"
 
 ABWPlayerCharacter::ABWPlayerCharacter()
 {
@@ -36,18 +36,42 @@ ABWPlayerCharacter::ABWPlayerCharacter()
 	{
 		Movement->bOrientRotationToMovement = true;
 		Movement->RotationRate = FRotator(0.0f, 540.0f, 0.0f);
+		// 기본 보행 속도를 WalkSpeed와 일치시킨다.
+		Movement->MaxWalkSpeed = WalkSpeed;
 	}
+
+	// AttributeComponent 생성·부착 (GC 추적을 위해 UPROPERTY + TObjectPtr)
+	AttributeComponent = CreateDefaultSubobject<UBWAttributeComponent>(TEXT("AttributeComponent"));
 }
 
 void ABWPlayerCharacter::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// AttributeComponent 델리게이트 구독
+	if (ensure(IsValid(AttributeComponent)))
+	{
+		AttributeComponent->OnStaminaDepleted.AddDynamic(this, &ABWPlayerCharacter::HandleStaminaDepleted);
+		AttributeComponent->OnStaminaChanged.AddDynamic(this, &ABWPlayerCharacter::HandleStaminaChanged);
+	}
 }
 
-void ABWPlayerCharacter::Tick(float DeltaTime)
+void ABWPlayerCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	Super::Tick(DeltaTime);
+	// 스태미나 소모 타이머 정리
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(SprintDrainTimerHandle);
+	}
+
+	// 델리게이트 구독 해제
+	if (IsValid(AttributeComponent))
+	{
+		AttributeComponent->OnStaminaDepleted.RemoveDynamic(this, &ABWPlayerCharacter::HandleStaminaDepleted);
+		AttributeComponent->OnStaminaChanged.RemoveDynamic(this, &ABWPlayerCharacter::HandleStaminaChanged);
+	}
+
+	Super::EndPlay(EndPlayReason);
 }
 
 void ABWPlayerCharacter::NotifyControllerChanged()
@@ -88,6 +112,14 @@ void ABWPlayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputC
 			EnhancedInput->BindAction(JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
 			EnhancedInput->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
 		}
+
+		if (SprintAction)
+		{
+			// Hold 방식: 누르는 동안 Started, 떼면 Completed/Canceled
+			EnhancedInput->BindAction(SprintAction, ETriggerEvent::Started, this, &ABWPlayerCharacter::StartSprint);
+			EnhancedInput->BindAction(SprintAction, ETriggerEvent::Completed, this, &ABWPlayerCharacter::StopSprint);
+			EnhancedInput->BindAction(SprintAction, ETriggerEvent::Canceled, this, &ABWPlayerCharacter::StopSprint);
+		}
 	}
 }
 
@@ -117,4 +149,124 @@ void ABWPlayerCharacter::Look(const FInputActionValue& Value)
 
 	AddControllerYawInput(LookAxisVector.X);
 	AddControllerPitchInput(LookAxisVector.Y);
+}
+
+// ── Sprint 입력 콜백 ─────────────────────────────────────────────────────────
+
+void ABWPlayerCharacter::StartSprint(const FInputActionValue& Value)
+{
+	bSprintInputHeld = true;
+
+	if (CanSprint())
+	{
+		BeginSprinting();
+	}
+}
+
+void ABWPlayerCharacter::StopSprint(const FInputActionValue& Value)
+{
+	bSprintInputHeld = false;
+	EndSprinting();
+}
+
+// ── Sprint 상태 전이 ─────────────────────────────────────────────────────────
+
+void ABWPlayerCharacter::BeginSprinting()
+{
+	if (bIsSprinting)
+	{
+		return;
+	}
+
+	bIsSprinting = true;
+
+	if (UCharacterMovementComponent* Movement = GetCharacterMovement())
+	{
+		Movement->MaxWalkSpeed = SprintSpeed;
+	}
+
+	// 스태미나 소모 반복 타이머 시작
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().SetTimer(
+			SprintDrainTimerHandle,
+			this,
+			&ABWPlayerCharacter::TickSprintDrain,
+			SprintStaminaDrainInterval,
+			/*bLoop=*/true
+		);
+	}
+}
+
+void ABWPlayerCharacter::EndSprinting()
+{
+	if (!bIsSprinting)
+	{
+		return;
+	}
+
+	bIsSprinting = false;
+
+	if (UCharacterMovementComponent* Movement = GetCharacterMovement())
+	{
+		Movement->MaxWalkSpeed = WalkSpeed;
+	}
+
+	// 스태미나 소모 타이머 정지
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(SprintDrainTimerHandle);
+	}
+}
+
+void ABWPlayerCharacter::TickSprintDrain()
+{
+	if (!IsValid(AttributeComponent))
+	{
+		EndSprinting();
+		return;
+	}
+
+	const float DrainAmount = SprintStaminaCostPerSecond * SprintStaminaDrainInterval;
+	const bool bSuccess = AttributeComponent->ConsumeStamina(DrainAmount);
+
+	if (!bSuccess)
+	{
+		// 스태미나 부족 — 질주 중단(HandleStaminaDepleted가 곧 호출되므로 여기서 중복 처리 방지)
+		EndSprinting();
+	}
+}
+
+void ABWPlayerCharacter::HandleStaminaDepleted()
+{
+	if (bIsSprinting)
+	{
+		// bSprintInputHeld는 건드리지 않음 — 버튼 유지 중이면 임계치 회복 후 자동 재개
+		EndSprinting();
+	}
+}
+
+void ABWPlayerCharacter::HandleStaminaChanged(float NewValue, float MaxValue)
+{
+	// 버튼이 눌린 상태이고, 현재 질주 중이 아니며, 스태미나가 임계치 이상이면 자동 재개
+	if (bSprintInputHeld && !bIsSprinting && IsValid(AttributeComponent))
+	{
+		if (AttributeComponent->IsStaminaAboveThreshold(SprintResumeThreshold))
+		{
+			BeginSprinting();
+		}
+	}
+}
+
+bool ABWPlayerCharacter::CanSprint() const
+{
+	if (!IsValid(AttributeComponent))
+	{
+		return false;
+	}
+
+	// 최소 한 틱분 스태미나를 보유해야 질주 진입 가능.
+	// 이보다 적으면 BeginSprinting 직후 첫 TickSprintDrain에서 실패해 즉시 종료되는 진입/종료 반복이 발생한다.
+	const float MinRequired = SprintStaminaCostPerSecond * SprintStaminaDrainInterval;
+	return AttributeComponent->HasEnoughStamina(MinRequired);
 }

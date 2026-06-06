@@ -11,12 +11,14 @@ class UCameraComponent;
 class UInputMappingContext;
 class UInputAction;
 class UInputComponent;
+class UBWAttributeComponent;
 struct FInputActionValue;
 
 /**
  * 플레이어가 조작하는 3인칭 소울라이크 전투 캐릭터의 베이스 클래스.
  * 락온 기반 근접 전투를 위한 카메라 붐 + 팔로우 카메라 구성을 제공한다.
- * 스태미나/포이즈/콤보 등 전투 시스템은 후속 작업에서 컴포넌트로 분리해 부착한다.
+ * AttributeComponent(Health/Stamina/Focus), Sprint 입력 처리가 포함된다.
+ * 스태미나 기반 Sprint: 버튼 홀드 시 SprintSpeed로 전환, 스태미나 소모, 0 고갈 시 중단 후 임계치 회복 시 자동 재개.
  */
 UCLASS()
 class BLOODWAKE_API ABWPlayerCharacter : public ACharacter
@@ -28,11 +30,15 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 public:
-	virtual void Tick(float DeltaTime) override;
 	virtual void NotifyControllerChanged() override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
+
+	/** AttributeComponent 접근자. GameMode 등 외부에서 FindComponentByClass 우회 없이 접근하기 위해 제공. */
+	UFUNCTION(BlueprintPure, Category = "Attributes")
+	UBWAttributeComponent* GetAttributeComponent() const { return AttributeComponent; }
 
 protected:
 	/** MoveAction 콜백: 컨트롤러 Yaw 기준으로 입력 벡터를 월드 이동 방향으로 변환해 이동한다. */
@@ -41,7 +47,41 @@ protected:
 	/** LookAction 콜백: 마우스/우스틱 입력을 컨트롤러 회전(Yaw/Pitch)에 적용한다. */
 	void Look(const FInputActionValue& Value);
 
+	// ── Sprint 입력 콜백 ────────────────────────────────────────────
+
+	/** IA_Sprint Started 바인딩. 조건 충족 시 질주를 시작한다. */
+	void StartSprint(const FInputActionValue& Value);
+
+	/** IA_Sprint Completed/Canceled 바인딩. 질주를 종료한다. */
+	void StopSprint(const FInputActionValue& Value);
+
+	// ── Sprint 상태 전이 ────────────────────────────────────────────
+
+	/** MaxWalkSpeed를 SprintSpeed로 전환하고 스태미나 소모 타이머를 시작한다. */
+	void BeginSprinting();
+
+	/** MaxWalkSpeed를 WalkSpeed로 복귀하고 스태미나 소모 타이머를 정지한다. */
+	void EndSprinting();
+
+	/** SprintDrainTimerHandle 콜백: 매 Interval마다 스태미나를 소모한다. 실패 시 질주 중단. */
+	void TickSprintDrain();
+
+	// ── AttributeComponent 델리게이트 콜백 (UFUNCTION 필수) ─────────
+
+	/** OnStaminaDepleted 구독: 질주 중이면 강제 종료, 버튼 유지 상태는 보존(자동 재개 대기). */
+	UFUNCTION()
+	void HandleStaminaDepleted();
+
+	/** OnStaminaChanged 구독: 자동 재개 판정(bSprintInputHeld && !bIsSprinting && 임계치 이상). */
+	UFUNCTION()
+	void HandleStaminaChanged(float NewValue, float MaxValue);
+
+	/** 질주를 시작할 수 있는 조건을 확인한다. */
+	bool CanSprint() const;
+
 protected:
+	// ── 카메라 ──────────────────────────────────────────────────────
+
 	/** 캐릭터와 카메라 사이 거리를 두고 충돌을 보정하는 카메라 붐. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Camera")
 	TObjectPtr<USpringArmComponent> CameraBoom;
@@ -50,15 +90,65 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Camera")
 	TObjectPtr<UCameraComponent> FollowCamera;
 
-	UPROPERTY(EditAnywhere)
+	// ── 입력 에셋 (BP 자식에서 에셋 지정) ──────────────────────────
+
+	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputMappingContext> DefaultMappingContext;
 
-	UPROPERTY(EditAnywhere)
+	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> MoveAction;
 
-	UPROPERTY(EditAnywhere)
+	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> LookAction;
 
-	UPROPERTY(EditAnywhere)
+	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> JumpAction;
+
+	/** Sprint 입력 액션(Digital bool, Hold). BP 자식에서 IA_Sprint 에셋을 지정한다. */
+	UPROPERTY(EditAnywhere, Category = "Input")
+	TObjectPtr<UInputAction> SprintAction;
+
+	// ── 컴포넌트 ────────────────────────────────────────────────────
+
+	/** Health / Stamina / Focus 자원 관리 컴포넌트. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Attributes")
+	TObjectPtr<UBWAttributeComponent> AttributeComponent;
+
+	// ── Sprint 튜닝 데이터 (BP 자식에서 설정) ───────────────────────
+
+	/** 보행 속도(cm/s). 질주 해제 시 복귀값. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Movement|Sprint", meta = (ClampMin = "0.0"))
+	float WalkSpeed = 400.f;
+
+	/** 질주 속도(cm/s). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Movement|Sprint", meta = (ClampMin = "0.0"))
+	float SprintSpeed = 650.f;
+
+	/** 초당 스태미나 소모량(질주 중). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Movement|Sprint", meta = (ClampMin = "0.0"))
+	float SprintStaminaCostPerSecond = 15.f;
+
+	/** 스태미나 소모 타이머 호출 간격(초). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Movement|Sprint", meta = (ClampMin = "0.01"))
+	float SprintStaminaDrainInterval = 0.1f;
+
+	/**
+	 * 스태미나 0 고갈 후 자동 재개 기준값.
+	 * 현재 스태미나가 이 값 이상으로 회복되면 버튼이 눌린 상태일 때 자동으로 질주를 재개한다.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Movement|Sprint", meta = (ClampMin = "0.0"))
+	float SprintResumeThreshold = 15.f;
+
+	// ── Sprint 런타임 상태 ──────────────────────────────────────────
+
+	/** 현재 질주 중인지 여부(에디터 디버그용). */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Movement|Sprint")
+	bool bIsSprinting = false;
+
+private:
+	/** Sprint 버튼이 눌린 채로 유지되고 있는지 여부. 자동 재개 판정에 사용. */
+	bool bSprintInputHeld = false;
+
+	/** 스태미나 소모 반복 타이머 핸들. */
+	FTimerHandle SprintDrainTimerHandle;
 };
