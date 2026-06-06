@@ -58,6 +58,16 @@ docs/
 Feature/
 CLAUDE.md
 
+# --- Unreal MCP 서버 관련 (저장소 제외) ---
+# MCP 클라이언트 설정 (로컬 경로 포함 — 머신마다 다름)
+.mcp.json
+# chongdashu/unreal-mcp 클론 (Python 서버 + .venv)
+/unreal-mcp/
+# 프로젝트에 복사한 UnrealMCP 플러그인 (외부 도구 — 게임 산출물 아님)
+/Plugins/UnrealMCP/
+# MCP 서버 로그
+unreal_mcp*.log
+
 # --- OS 부산물 ---
 Thumbs.db
 ehthumbs.db

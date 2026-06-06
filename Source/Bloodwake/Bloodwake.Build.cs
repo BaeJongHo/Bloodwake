@@ -7,7 +7,11 @@ public class Bloodwake : ModuleRules
 	public Bloodwake(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
-	
+
+		// flat 모듈(Public/Private 폴더 없음)이라 모듈 루트를 명시적으로 include 경로에 등록한다.
+		// 이로써 서브폴더 헤더를 "GameMode/BWGameMode.h" 같은 모듈 루트 기준 경로로 include 할 수 있다.
+		PublicIncludePaths.Add(ModuleDirectory);
+
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput" });
 
 		PrivateDependencyModuleNames.AddRange(new string[] {  });
