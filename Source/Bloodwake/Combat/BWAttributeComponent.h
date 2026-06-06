@@ -141,7 +141,7 @@ public:
 
 	/** 마지막 소비 후 regen이 시작되기 전까지 대기 시간(초). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Attributes|Regen", meta = (ClampMin = "0.0"))
-	float RegenDelay = 0.8f;
+	float RegenDelay = 1.0f;
 
 	/** regen 타이머 호출 간격(초). 낮을수록 부드럽지만 비용 증가. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Attributes|Regen", meta = (ClampMin = "0.01"))

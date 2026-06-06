@@ -26,6 +26,15 @@ public:
 	virtual void NativeInitializeAnimation() override;
 	virtual void NativeThreadSafeUpdateAnimation(float DeltaSeconds) override;
 
+	/**
+	 * 회피(Roll) 몽타주에 배치한 커스텀(이름 기반) AnimNotify "RollEnd"가 호출하는 함수.
+	 * 엔진은 이름 기반 노티파이를 소유 AnimInstance의 AnimNotify_<NotifyName> 함수로 디스패치한다.
+	 * 따라서 몽타주에 "RollEnd" 노티파이를 배치하면 이 함수가 호출되며(에디터에서 배치),
+	 * 소유 캐릭터의 EndRoll을 호출해 Roll 상태를 해제(→ Normal)한다.
+	 */
+	UFUNCTION()
+	void AnimNotify_RollEnd();
+
 protected:
 	/** 소유 플레이어 캐릭터. NativeInitializeAnimation에서 한 번 캐시한다. */
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Character", meta = (AllowPrivateAccess = "true"))

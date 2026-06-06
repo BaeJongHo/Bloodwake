@@ -5,10 +5,14 @@
 #include "Camera/CameraComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Animation/AnimInstance.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
 #include "Combat/BWAttributeComponent.h"
+#include "Character/BWStateComponent.h"
+#include "Core/BWGameplayDefine.h"
 
 ABWPlayerCharacter::ABWPlayerCharacter()
 {
@@ -42,6 +46,9 @@ ABWPlayerCharacter::ABWPlayerCharacter()
 
 	// AttributeComponent 생성·부착 (GC 추적을 위해 UPROPERTY + TObjectPtr)
 	AttributeComponent = CreateDefaultSubobject<UBWAttributeComponent>(TEXT("AttributeComponent"));
+
+	// StateComponent 생성·부착. GameplayTagContainer로 행동 상태를 관리한다.
+	StateComponent = CreateDefaultSubobject<UBWStateComponent>(TEXT("StateComponent"));
 }
 
 void ABWPlayerCharacter::BeginPlay()
@@ -108,23 +115,39 @@ void ABWPlayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputC
 
 		if (JumpAction)
 		{
-			// 점프는 ACharacter 내장 구현을 사용한다. 누름(Started)에 점프 시작, 뗌(Completed)에 점프 종료.
-			EnhancedInput->BindAction(JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
+			// 점프 시작은 구르기 차단을 위해 래퍼(StartJump)를 경유한다. 종료는 ACharacter 내장 구현 사용.
+			EnhancedInput->BindAction(JumpAction, ETriggerEvent::Started, this, &ABWPlayerCharacter::StartJump);
 			EnhancedInput->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
 		}
 
 		if (SprintAction)
 		{
-			// Hold 방식: 누르는 동안 Started, 떼면 Completed/Canceled
-			EnhancedInput->BindAction(SprintAction, ETriggerEvent::Started, this, &ABWPlayerCharacter::StartSprint);
-			EnhancedInput->BindAction(SprintAction, ETriggerEvent::Completed, this, &ABWPlayerCharacter::StopSprint);
-			EnhancedInput->BindAction(SprintAction, ETriggerEvent::Canceled, this, &ABWPlayerCharacter::StopSprint);
+			// Hold 전용 IA: Hold 임계 시간 충족 시 Triggered(1회) → 질주 시작.
+			// 기존 Started(누르자마자) 시작에서 Triggered(Hold 충족) 시작으로 변경됨.
+			// 주의: RollAction(Tap IA)과 같은 물리 키에 매핑 시 Tap은 RollAction이 담당,
+			//       Hold 충족 전 Tap으로 처리되면 SprintRollingAction의 Triggered는 발생하지 않는다.
+			EnhancedInput->BindAction(SprintAction, ETriggerEvent::Triggered,  this, &ABWPlayerCharacter::StartSprint);
+			EnhancedInput->BindAction(SprintAction, ETriggerEvent::Completed,  this, &ABWPlayerCharacter::StopSprint);
+			EnhancedInput->BindAction(SprintAction, ETriggerEvent::Canceled,   this, &ABWPlayerCharacter::StopSprint);
+		}
+
+		if (RollAction)
+		{
+			// Tap 전용 IA: 짧은 탭 충족 시 Triggered(1회) → 구르기 상태 진입.
+			// Tap 전용 IA: 짧은 탭 충족 시 Triggered(1회) → 구르기 상태 진입.
+			EnhancedInput->BindAction(RollAction, ETriggerEvent::Triggered, this, &ABWPlayerCharacter::Roll);
 		}
 	}
 }
 
 void ABWPlayerCharacter::Move(const FInputActionValue& Value)
 {
+	// 구르기 중에는 이동 입력을 무시한다(회피 모션이 이동을 전담).
+	if (IsRolling())
+	{
+		return;
+	}
+
 	const FVector2D MovementVector = Value.Get<FVector2D>();
 
 	AController* PlayerController = GetController();
@@ -149,6 +172,22 @@ void ABWPlayerCharacter::Look(const FInputActionValue& Value)
 
 	AddControllerYawInput(LookAxisVector.X);
 	AddControllerPitchInput(LookAxisVector.Y);
+}
+
+void ABWPlayerCharacter::StartJump()
+{
+	// 구르기 중에는 점프를 차단한다.
+	if (IsRolling())
+	{
+		return;
+	}
+
+	Jump();
+}
+
+bool ABWPlayerCharacter::IsRolling() const
+{
+	return IsValid(StateComponent) && StateComponent->HasStateTag(BWGameplayTags::Character_State_Roll.GetTag());
 }
 
 // ── Sprint 입력 콜백 ─────────────────────────────────────────────────────────
@@ -196,6 +235,12 @@ void ABWPlayerCharacter::BeginSprinting()
 			/*bLoop=*/true
 		);
 	}
+
+	// Sprint 상태 태그 부착
+	if (StateComponent)
+	{
+		StateComponent->AddStateTag(BWGameplayTags::Character_State_Sprint.GetTag());
+	}
 }
 
 void ABWPlayerCharacter::EndSprinting()
@@ -217,6 +262,12 @@ void ABWPlayerCharacter::EndSprinting()
 	{
 		World->GetTimerManager().ClearTimer(SprintDrainTimerHandle);
 	}
+
+	// Sprint 상태 태그 해제
+	if (StateComponent)
+	{
+		StateComponent->RemoveStateTag(BWGameplayTags::Character_State_Sprint.GetTag());
+	}
 }
 
 void ABWPlayerCharacter::TickSprintDrain()
@@ -232,7 +283,7 @@ void ABWPlayerCharacter::TickSprintDrain()
 
 	if (!bSuccess)
 	{
-		// 스태미나 부족 — 질주 중단(HandleStaminaDepleted가 곧 호출되므로 여기서 중복 처리 방지)
+		// 스태미나 부족 — 질주 중단(ConsumeStamina가 false를 반환할 때는 OnStaminaDepleted가 발생하지 않으므로 여기서 직접 종료).
 		EndSprinting();
 	}
 }
@@ -255,6 +306,88 @@ void ABWPlayerCharacter::HandleStaminaChanged(float NewValue, float MaxValue)
 		{
 			BeginSprinting();
 		}
+	}
+}
+
+void ABWPlayerCharacter::Roll(const FInputActionValue& Value)
+{
+	if (!IsValid(StateComponent))
+	{
+		return;
+	}
+
+	// 이미 구르는 중이면 중복 입력 무시.
+	if (IsRolling())
+	{
+		return;
+	}
+
+	// 공중(점프/낙하) 중에는 구를 수 없다. 지상에서만 회피를 허용한다.
+	if (const UCharacterMovementComponent* Movement = GetCharacterMovement())
+	{
+		if (Movement->IsFalling())
+		{
+			return;
+		}
+	}
+
+	// 회피 몽타주가 없으면 구르기를 진행하지 않는다(상태만 부착되고 해제 못 해 Move/Jump가 영구 차단되는 것 방지).
+	if (!RollMontage)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[BWPlayerCharacter] RollMontage가 설정되지 않아 구르기를 재생할 수 없습니다. BP 자식에서 RollMontage를 지정하세요."));
+		return;
+	}
+
+	// 스태미나가 부족하면 구르기 불가(소울라이크: 자원 없으면 행동 불가).
+	if (IsValid(AttributeComponent) && !AttributeComponent->HasEnoughStamina(RollStaminaCost))
+	{
+		return;
+	}
+
+	// TODO(후속): i-frame 활성화.
+
+	// 구르기 상태 진입(Normal 자동 해제). 이 동안 Move/Jump가 차단된다.
+	StateComponent->AddStateTag(BWGameplayTags::Character_State_Roll.GetTag());
+
+	// 스태미나 소비. ConsumeStamina가 소비 시점(LastConsumeTime)을 기록하고 regen 타이머를 재가동하므로,
+	// AttributeComponent의 RegenDelay(1초) 경과 후 스태미나가 자동으로 다시 회복된다.
+	if (IsValid(AttributeComponent))
+	{
+		AttributeComponent->ConsumeStamina(RollStaminaCost);
+	}
+
+	// 회피 몽타주 재생.
+	// 1) 정상 흐름: 몽타주에 배치한 커스텀 AnimNotify("RollEnd")가 회복 시점에 EndRoll을 호출(이른 입력 허용).
+	// 2) 안전망: 몽타주 종료 델리게이트를 바인딩해, 공격 등 다른 몽타주가 구르기를 끊어
+	//    RollEnd 노티파이가 불리지 못한 경우(bInterrupted=true)에도 EndRoll을 보장 호출한다.
+	UAnimInstance* AnimInstance = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr;
+	const float MontageLength = AnimInstance ? AnimInstance->Montage_Play(RollMontage) : 0.f;
+	if (MontageLength > 0.f)
+	{
+		FOnMontageEnded EndDelegate;
+		EndDelegate.BindUObject(this, &ABWPlayerCharacter::OnRollMontageEnded);
+		AnimInstance->Montage_SetEndDelegate(EndDelegate, RollMontage);
+	}
+	else
+	{
+		// 몽타주 재생 실패 — 상태가 갇히지 않도록 즉시 해제한다.
+		EndRoll();
+	}
+}
+
+void ABWPlayerCharacter::OnRollMontageEnded(UAnimMontage* Montage, bool bInterrupted)
+{
+	// 정상 종료(노티파이가 이미 EndRoll 했을 수 있음)든 중단이든 Roll 상태를 확실히 해제한다.
+	// EndRoll은 태그가 이미 없으면 무시되므로 중복 호출이 안전하다.
+	EndRoll();
+}
+
+void ABWPlayerCharacter::EndRoll()
+{
+	if (IsValid(StateComponent))
+	{
+		// Roll 태그 해제 → StateComponent가 행동 상태 부재를 감지해 Normal로 자동 복귀시킨다.
+		StateComponent->RemoveStateTag(BWGameplayTags::Character_State_Roll.GetTag());
 	}
 }
 

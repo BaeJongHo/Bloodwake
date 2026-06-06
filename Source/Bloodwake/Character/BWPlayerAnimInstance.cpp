@@ -22,6 +22,15 @@ void UBWPlayerAnimInstance::NativeInitializeAnimation()
 	}
 }
 
+void UBWPlayerAnimInstance::AnimNotify_RollEnd()
+{
+	// 캐시한 소유 캐릭터에 회피 종료를 위임한다(상태 태그 관리는 캐릭터/StateComponent 책임).
+	if (OwningCharacter)
+	{
+		OwningCharacter->EndRoll();
+	}
+}
+
 void UBWPlayerAnimInstance::NativeThreadSafeUpdateAnimation(float DeltaSeconds)
 {
 	Super::NativeThreadSafeUpdateAnimation(DeltaSeconds);

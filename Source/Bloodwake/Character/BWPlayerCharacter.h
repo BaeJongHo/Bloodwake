@@ -12,13 +12,16 @@ class UInputMappingContext;
 class UInputAction;
 class UInputComponent;
 class UBWAttributeComponent;
+class UBWStateComponent;
+class UAnimMontage;
 struct FInputActionValue;
 
 /**
  * 플레이어가 조작하는 3인칭 소울라이크 전투 캐릭터의 베이스 클래스.
  * 락온 기반 근접 전투를 위한 카메라 붐 + 팔로우 카메라 구성을 제공한다.
- * AttributeComponent(Health/Stamina/Focus), Sprint 입력 처리가 포함된다.
- * 스태미나 기반 Sprint: 버튼 홀드 시 SprintSpeed로 전환, 스태미나 소모, 0 고갈 시 중단 후 임계치 회복 시 자동 재개.
+ * AttributeComponent(Health/Stamina/Focus), StateComponent(GameplayTagContainer), Sprint/Roll 입력 처리가 포함된다.
+ * 스태미나 기반 Sprint: Hold IA 충족(Triggered) 시 SprintSpeed로 전환, 스태미나 소모, 0 고갈 시 중단 후 임계치 회복 시 자동 재개.
+ * Roll: 별도 Tap IA(RollAction) 충족 시 Roll 상태 태그 부착 + RollMontage 재생. 몽타주의 AnimNotify가 EndRoll로 상태 해제. i-frame/스태미나 소모는 후속 작업.
  */
 UCLASS()
 class BLOODWAKE_API ABWPlayerCharacter : public ACharacter
@@ -40,20 +43,57 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Attributes")
 	UBWAttributeComponent* GetAttributeComponent() const { return AttributeComponent; }
 
+	/**
+	 * 회피(Roll) 종료 처리. 회피 몽타주에 배치한 AnimNotify(AnimInstance의 AnimNotify_RollEnd)가 호출한다.
+	 * Roll 상태 태그를 해제하며, StateComponent가 행동 상태 부재를 감지해 Normal로 자동 복귀시킨다.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Combat|Roll")
+	void EndRoll();
+
 protected:
-	/** MoveAction 콜백: 컨트롤러 Yaw 기준으로 입력 벡터를 월드 이동 방향으로 변환해 이동한다. */
+	/** MoveAction 콜백: 컨트롤러 Yaw 기준으로 입력 벡터를 월드 이동 방향으로 변환해 이동한다. 구르기 중에는 무시한다. */
 	void Move(const FInputActionValue& Value);
 
 	/** LookAction 콜백: 마우스/우스틱 입력을 컨트롤러 회전(Yaw/Pitch)에 적용한다. */
 	void Look(const FInputActionValue& Value);
 
-	// ── Sprint 입력 콜백 ────────────────────────────────────────────
+	/** JumpAction(Started) 콜백: 구르기 중이 아니면 ACharacter::Jump를 호출한다. */
+	void StartJump();
 
-	/** IA_Sprint Started 바인딩. 조건 충족 시 질주를 시작한다. */
+	/**
+	 * 현재 구르기(Character.State.Roll) 상태인지 확인한다. 이동·점프 차단 판정에 사용.
+	 * BP에서도 호출 가능(예: 공격 시작 전 "구르기 중이면 공격 금지" 게이트).
+	 */
+	UFUNCTION(BlueprintPure, Category = "Combat|Roll")
+	bool IsRolling() const;
+
+	// ── Sprint / Roll 입력 콜백 ─────────────────────────────────────
+
+	/**
+	 * SprintAction(Hold 전용 IA) Triggered 바인딩.
+	 * Hold 임계 시간 충족 시 1회 호출된다. 조건 충족 시 질주를 시작한다.
+	 * 주의: 기존 Started(누르자마자) 시작에서 Triggered(Hold 충족) 시작으로 변경됨.
+	 *       Hold Time Threshold는 에디터 IA 에셋에서 튜닝한다(예: 0.15~0.2s).
+	 */
 	void StartSprint(const FInputActionValue& Value);
 
-	/** IA_Sprint Completed/Canceled 바인딩. 질주를 종료한다. */
+	/** SprintAction Completed/Canceled 바인딩. 질주를 종료한다. */
 	void StopSprint(const FInputActionValue& Value);
+
+	/**
+	 * RollAction(Tap 전용 IA) Triggered 바인딩.
+	 * 짧은 탭 입력 충족 시 Roll 상태 태그를 부착하고 RollMontage를 재생한다.
+	 * 상태 해제는 몽타주에 배치한 AnimNotify(→ EndRoll)가 담당한다.
+	 * TODO(후속): 스태미나 소모 체크, i-frame 활성화.
+	 */
+	void Roll(const FInputActionValue& Value);
+
+	/**
+	 * RollMontage 종료 콜백(Montage_SetEndDelegate 바인딩).
+	 * 정상 종료든 다른 몽타주(공격 등)에 의한 중단(bInterrupted=true)이든 호출되어,
+	 * RollEnd 노티파이가 불리지 못한 경우에도 Roll 상태를 보장 해제한다(입력 먹통 방지).
+	 */
+	void OnRollMontageEnded(UAnimMontage* Montage, bool bInterrupted);
 
 	// ── Sprint 상태 전이 ────────────────────────────────────────────
 
@@ -104,15 +144,44 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> JumpAction;
 
-	/** Sprint 입력 액션(Digital bool, Hold). BP 자식에서 IA_Sprint 에셋을 지정한다. */
+	/**
+	 * Sprint(Hold) 전용 입력 액션. BP 자식에서 IA_Sprint 에셋을 지정한다.
+	 * 에셋에 UInputTriggerHold를 부착해 Hold 충족 시 Triggered가 발생하도록 설정한다(에디터 작업).
+	 * 같은 물리 키에 RollAction(Tap IA)도 함께 IMC에 매핑한다.
+	 */
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> SprintAction;
+
+	/**
+	 * Roll(Tap) 전용 입력 액션. BP 자식에서 IA_Roll 에셋을 지정한다(신규 에셋, 에디터 후속 작업).
+	 * 에셋에 UInputTriggerTap을 부착해 짧은 탭 충족 시 Triggered가 발생하도록 설정한다.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Input")
+	TObjectPtr<UInputAction> RollAction;
 
 	// ── 컴포넌트 ────────────────────────────────────────────────────
 
 	/** Health / Stamina / Focus 자원 관리 컴포넌트. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Attributes")
 	TObjectPtr<UBWAttributeComponent> AttributeComponent;
+
+	/** 현재 행동 상태(Sprint / Roll / Attack 등)를 GameplayTagContainer로 관리하는 컴포넌트. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "State")
+	TObjectPtr<UBWStateComponent> StateComponent;
+
+	// ── Roll(회피) 데이터 (BP 자식에서 설정) ────────────────────────
+
+	/**
+	 * 회피(Roll) 시 재생할 몽타주. BP 자식에서 AM_ 회피 몽타주를 지정한다.
+	 * 몽타주 종료 지점에 커스텀 AnimNotify("RollEnd")를 배치하면
+	 * UBWPlayerAnimInstance::AnimNotify_RollEnd가 호출되어 EndRoll로 상태가 해제된다(에디터 작업).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Roll")
+	TObjectPtr<UAnimMontage> RollMontage;
+
+	/** 구르기 1회에 소비하는 스태미나. 부족하면 구르기가 발동하지 않는다. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Roll", meta = (ClampMin = "0.0"))
+	float RollStaminaCost = 20.f;
 
 	// ── Sprint 튜닝 데이터 (BP 자식에서 설정) ───────────────────────
 
