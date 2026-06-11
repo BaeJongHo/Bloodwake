@@ -11,8 +11,13 @@
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
 #include "Combat/BWAttributeComponent.h"
+#include "Combat/BWCombatComponent.h"
+#include "Combat/BWAttackComponent.h"
 #include "Character/BWStateComponent.h"
 #include "Core/BWGameplayDefine.h"
+#include "Equipment/BWPickUpItem.h"
+#include "Equipment/BWEquipItem.h"
+#include "DrawDebugHelpers.h"
 
 ABWPlayerCharacter::ABWPlayerCharacter()
 {
@@ -49,6 +54,12 @@ ABWPlayerCharacter::ABWPlayerCharacter()
 
 	// StateComponent 생성·부착. GameplayTagContainer로 행동 상태를 관리한다.
 	StateComponent = CreateDefaultSubobject<UBWStateComponent>(TEXT("StateComponent"));
+
+	// CombatComponent 생성·부착. 장비 보유·장착·해제 로직을 담당한다.
+	CombatComponent = CreateDefaultSubobject<UBWCombatComponent>(TEXT("CombatComponent"));
+
+	// AttackComponent 생성·부착. 공격(콤보) 로직을 담당한다.
+	AttackComponent = CreateDefaultSubobject<UBWAttackComponent>(TEXT("AttackComponent"));
 }
 
 void ABWPlayerCharacter::BeginPlay()
@@ -134,16 +145,46 @@ void ABWPlayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputC
 		if (RollAction)
 		{
 			// Tap 전용 IA: 짧은 탭 충족 시 Triggered(1회) → 구르기 상태 진입.
-			// Tap 전용 IA: 짧은 탭 충족 시 Triggered(1회) → 구르기 상태 진입.
 			EnhancedInput->BindAction(RollAction, ETriggerEvent::Triggered, this, &ABWPlayerCharacter::Roll);
+		}
+
+		if (InteractAction)
+		{
+			// 누르는 순간 1회(Started) → 구체 스윕으로 픽업 감지 후 장착 위임.
+			EnhancedInput->BindAction(InteractAction, ETriggerEvent::Started, this, &ABWPlayerCharacter::Interact);
+		}
+
+		if (ToggleWeaponAction)
+		{
+			// 누르는 순간 1회(Started) → 무기 손↔등 토글.
+			EnhancedInput->BindAction(ToggleWeaponAction, ETriggerEvent::Started, this, &ABWPlayerCharacter::ToggleWeapon);
+		}
+
+		if (ToggleShieldAction)
+		{
+			// 누르는 순간 1회(Started) → 방패 손↔등 토글.
+			EnhancedInput->BindAction(ToggleShieldAction, ETriggerEvent::Started, this, &ABWPlayerCharacter::ToggleShield);
+		}
+
+		if (AttackAction)
+		{
+			// IA_Attack: Started(누르는 순간) → PrimaryTap(Light/Running 분기), Triggered(Hold 충족) → PrimaryHold(Special).
+			EnhancedInput->BindAction(AttackAction, ETriggerEvent::Canceled, this, &ABWPlayerCharacter::OnAttackStarted);
+			EnhancedInput->BindAction(AttackAction, ETriggerEvent::Triggered, this, &ABWPlayerCharacter::OnAttackHold);
+		}
+
+		if (HeavyAttackAction)
+		{
+			// IA_HeavyAttack: Started(누르는 순간) → Heavy.
+			EnhancedInput->BindAction(HeavyAttackAction, ETriggerEvent::Started, this, &ABWPlayerCharacter::OnHeavyAttack);
 		}
 	}
 }
 
 void ABWPlayerCharacter::Move(const FInputActionValue& Value)
 {
-	// 구르기 중에는 이동 입력을 무시한다(회피 모션이 이동을 전담).
-	if (IsRolling())
+	// 구르기 또는 공격 중에는 이동 입력을 무시한다.
+	if (IsRolling() || IsAttacking())
 	{
 		return;
 	}
@@ -176,8 +217,8 @@ void ABWPlayerCharacter::Look(const FInputActionValue& Value)
 
 void ABWPlayerCharacter::StartJump()
 {
-	// 구르기 중에는 점프를 차단한다.
-	if (IsRolling())
+	// 구르기 또는 공격 중에는 점프를 차단한다.
+	if (IsRolling() || IsAttacking())
 	{
 		return;
 	}
@@ -316,8 +357,8 @@ void ABWPlayerCharacter::Roll(const FInputActionValue& Value)
 		return;
 	}
 
-	// 이미 구르는 중이면 중복 입력 무시.
-	if (IsRolling())
+	// 이미 구르는 중이거나 공격 중이면 중복 입력 무시.
+	if (IsRolling() || IsAttacking())
 	{
 		return;
 	}
@@ -402,4 +443,138 @@ bool ABWPlayerCharacter::CanSprint() const
 	// 이보다 적으면 BeginSprinting 직후 첫 TickSprintDrain에서 실패해 즉시 종료되는 진입/종료 반복이 발생한다.
 	const float MinRequired = SprintStaminaCostPerSecond * SprintStaminaDrainInterval;
 	return AttributeComponent->HasEnoughStamina(MinRequired);
+}
+
+void ABWPlayerCharacter::Interact(const FInputActionValue& /*Value*/)
+{
+	if (!IsValid(CombatComponent))
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	// 캐릭터 위치에서 전방으로 InteractTraceDistance만큼 구체 스윕.
+	const FVector Start = GetActorLocation();
+	const FVector End   = Start + GetActorForwardVector() * InteractTraceDistance;
+
+	TArray<FHitResult> Hits;
+	const FCollisionShape Sphere = FCollisionShape::MakeSphere(InteractTraceRadius);
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(BWInteractTrace), false, this);
+
+	const bool bHit = World->SweepMultiByChannel(
+		Hits, Start, End, FQuat::Identity, InteractTraceChannel, Sphere, Params);
+
+	if (bDrawInteractDebug)
+	{
+		DrawDebugSphere(World, End, InteractTraceRadius, 12,
+			bHit ? FColor::Green : FColor::Red, false, 1.0f);
+	}
+
+	if (!bHit)
+	{
+		return;
+	}
+
+	// 가장 가까운 ABWPickUpItem 선택.
+	ABWPickUpItem* Best = nullptr;
+	float BestDistSq = TNumericLimits<float>::Max();
+
+	for (const FHitResult& H : Hits)
+	{
+		if (ABWPickUpItem* Pick = Cast<ABWPickUpItem>(H.GetActor()))
+		{
+			const float DistSq = FVector::DistSquared(Start, Pick->GetActorLocation());
+			if (DistSq < BestDistSq)
+			{
+				BestDistSq = DistSq;
+				Best = Pick;
+			}
+		}
+	}
+
+	if (!Best)
+	{
+		return;
+	}
+
+	// 픽업 Transform 캡처 — EquipNewItem 내부 교체 드롭 시 이 위치에 기존 장비를 드롭한다.
+	// 1회 트레이스 후 동기 처리이므로, 드롭으로 생성된 새 픽업은 이 호출 내에서 재감지되지 않는다(무한 루프 방지).
+	const FTransform BestTransform = Best->GetActorTransform();
+
+	// 장착을 CombatComponent에 위임하고, 성공 시에만 원본 픽업을 소비한다.
+	// EquipNewItem 내부에서 교체 드롭(DropEquipItem)이 완료된 후 반환되므로 순서 보장됨.
+	if (CombatComponent->EquipNewItem(Best->GetEquipItemClass(), BestTransform))
+	{
+		if (IsValid(Best))
+		{
+			Best->Consume();
+		}
+	}
+}
+
+void ABWPlayerCharacter::ToggleWeapon(const FInputActionValue& /*Value*/)
+{
+	if (!IsValid(CombatComponent))
+	{
+		return;
+	}
+
+	CombatComponent->ToggleWeapon();
+}
+
+void ABWPlayerCharacter::ToggleShield(const FInputActionValue& /*Value*/)
+{
+	if (!IsValid(CombatComponent))
+	{
+		return;
+	}
+
+	CombatComponent->ToggleShield();
+}
+
+bool ABWPlayerCharacter::IsAttacking() const
+{
+	if (!IsValid(AttackComponent))
+	{
+		return false;
+	}
+
+	return AttackComponent->IsAttacking();
+}
+
+// ── 공격 입력 콜백 ─────────────────────────────────────────────────────────────
+
+void ABWPlayerCharacter::OnAttackStarted(const FInputActionValue& /*Value*/)
+{
+	if (!IsValid(AttackComponent))
+	{
+		return;
+	}
+
+	AttackComponent->RequestAttack(EBWAttackInputKind::PrimaryTap);
+}
+
+void ABWPlayerCharacter::OnAttackHold(const FInputActionValue& /*Value*/)
+{
+	if (!IsValid(AttackComponent))
+	{
+		return;
+	}
+
+	AttackComponent->RequestAttack(EBWAttackInputKind::PrimaryHold);
+}
+
+void ABWPlayerCharacter::OnHeavyAttack(const FInputActionValue& /*Value*/)
+{
+	if (!IsValid(AttackComponent))
+	{
+		return;
+	}
+
+	AttackComponent->RequestAttack(EBWAttackInputKind::Heavy);
 }

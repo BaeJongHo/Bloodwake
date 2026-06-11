@@ -13,6 +13,8 @@ class UInputAction;
 class UInputComponent;
 class UBWAttributeComponent;
 class UBWStateComponent;
+class UBWCombatComponent;
+class UBWAttackComponent;
 class UAnimMontage;
 struct FInputActionValue;
 
@@ -50,9 +52,57 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Combat|Roll")
 	void EndRoll();
 
+	/**
+	 * 현재 공격 중인지 확인한다. AttackComponent->IsAttacking()에 위임한다.
+	 * Move/StartJump/Roll 차단 게이트 및 BP에서 사용한다.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Combat|Attack")
+	bool IsAttacking() const;
+
 protected:
-	/** MoveAction 콜백: 컨트롤러 Yaw 기준으로 입력 벡터를 월드 이동 방향으로 변환해 이동한다. 구르기 중에는 무시한다. */
+	/** MoveAction 콜백: 컨트롤러 Yaw 기준으로 입력 벡터를 월드 이동 방향으로 변환해 이동한다. 구르기/공격 중에는 무시한다. */
 	void Move(const FInputActionValue& Value);
+
+	// ── 공격 입력 콜백 ──────────────────────────────────────────────
+
+	/**
+	 * AttackAction(Started) 콜백 — IA_Attack 누르는 순간.
+	 * AttackComponent->RequestAttack(PrimaryTap)에 위임한다.
+	 * Sprint 태그 보유 중이면 Running, 아니면 Light로 분기(컴포넌트 내부 처리).
+	 */
+	void OnAttackStarted(const FInputActionValue& Value);
+
+	/**
+	 * AttackAction(Triggered) 콜백 — IA_Attack Hold 임계 충족 시.
+	 * AttackComponent->RequestAttack(PrimaryHold)에 위임한다.
+	 * 컴포넌트 내부에서 Light 극초기이면 Special로 전환, 아니면 무시한다.
+	 */
+	void OnAttackHold(const FInputActionValue& Value);
+
+	/**
+	 * HeavyAttackAction(Started) 콜백 — IA_HeavyAttack 누르는 순간.
+	 * AttackComponent->RequestAttack(Heavy)에 위임한다.
+	 */
+	void OnHeavyAttack(const FInputActionValue& Value);
+
+	/**
+	 * InteractAction(Started) 콜백.
+	 * 캐릭터 전방으로 구체 스윕을 1회 수행해 가장 가까운 ABWPickUpItem을 감지하고,
+	 * CombatComponent에 장착을 위임한다. 성공 시 픽업 액터를 소비(Destroy)한다.
+	 */
+	void Interact(const FInputActionValue& Value);
+
+	/**
+	 * ToggleWeaponAction(Started) 콜백.
+	 * CombatComponent->ToggleWeapon()에 위임한다.
+	 */
+	void ToggleWeapon(const FInputActionValue& Value);
+
+	/**
+	 * ToggleShieldAction(Started) 콜백.
+	 * CombatComponent->ToggleShield()에 위임한다.
+	 */
+	void ToggleShield(const FInputActionValue& Value);
 
 	/** LookAction 콜백: 마우스/우스틱 입력을 컨트롤러 회전(Yaw/Pitch)에 적용한다. */
 	void Look(const FInputActionValue& Value);
@@ -159,6 +209,41 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> RollAction;
 
+	/**
+	 * Interact 입력 액션. BP 자식에서 IA_Interact 에셋을 지정한다.
+	 * 누르는 순간 1회(Started) 발동 — 구체 스윕으로 근처 픽업을 감지해 장착을 시도한다.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Input")
+	TObjectPtr<UInputAction> InteractAction;
+
+	/**
+	 * 무기 손↔등 토글 입력 액션. BP 자식에서 IA_ToggleWeapon 에셋을 지정한다.
+	 * 누르는 순간 1회(Started) 발동 — CombatComponent->ToggleWeapon()에 위임한다.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Input")
+	TObjectPtr<UInputAction> ToggleWeaponAction;
+
+	/**
+	 * 방패 손↔등 토글 입력 액션. BP 자식에서 IA_ToggleShield 에셋을 지정한다.
+	 * 누르는 순간 1회(Started) 발동 — CombatComponent->ToggleShield()에 위임한다.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Input")
+	TObjectPtr<UInputAction> ToggleShieldAction;
+
+	/**
+	 * Attack(약공격·대쉬·특수) 입력 액션. BP 자식에서 IA_Attack 에셋을 지정한다.
+	 * IA 에셋에 Hold 트리거를 붙여 Started(Tap)와 Triggered(Hold) 두 이벤트로 분기한다(에디터 작업).
+	 */
+	UPROPERTY(EditAnywhere, Category = "Input")
+	TObjectPtr<UInputAction> AttackAction;
+
+	/**
+	 * Heavy 공격 입력 액션. BP 자식에서 IA_HeavyAttack 에셋을 지정한다.
+	 * 누르는 순간 1회(Started) 발동.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Input")
+	TObjectPtr<UInputAction> HeavyAttackAction;
+
 	// ── 컴포넌트 ────────────────────────────────────────────────────
 
 	/** Health / Stamina / Focus 자원 관리 컴포넌트. */
@@ -168,6 +253,32 @@ protected:
 	/** 현재 행동 상태(Sprint / Roll / Attack 등)를 GameplayTagContainer로 관리하는 컴포넌트. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "State")
 	TObjectPtr<UBWStateComponent> StateComponent;
+
+	/** 장비 보유·장착·해제 로직을 담당하는 전투 컴포넌트. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat")
+	TObjectPtr<UBWCombatComponent> CombatComponent;
+
+	/** 공격(콤보) 로직을 담당하는 컴포넌트. DataTable에서 몽타주·스태미나를 설정한다. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat")
+	TObjectPtr<UBWAttackComponent> AttackComponent;
+
+	// ── 인터랙션 튜닝 데이터 (BP 자식에서 설정) ─────────────────────
+
+	/** 구체 트레이스 반경(cm). BP 자식에서 튜닝한다. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Interaction", meta = (ClampMin = "0.0"))
+	float InteractTraceRadius = 100.f;
+
+	/** 캐릭터 전방 스윕 거리(cm). BP 자식에서 튜닝한다. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Interaction", meta = (ClampMin = "0.0"))
+	float InteractTraceDistance = 150.f;
+
+	/** 구체 트레이스 채널. 커스텀 채널이 필요하면 BP에서 교체한다. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Interaction")
+	TEnumAsByte<ECollisionChannel> InteractTraceChannel = ECC_Visibility;
+
+	/** true이면 Interact 트레이스 결과를 뷰포트에 구체로 표시한다(디버그용). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Interaction")
+	bool bDrawInteractDebug = false;
 
 	// ── Roll(회피) 데이터 (BP 자식에서 설정) ────────────────────────
 
@@ -191,7 +302,7 @@ protected:
 
 	/** 질주 속도(cm/s). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Movement|Sprint", meta = (ClampMin = "0.0"))
-	float SprintSpeed = 650.f;
+	float SprintSpeed = 800.f;
 
 	/** 초당 스태미나 소모량(질주 중). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Movement|Sprint", meta = (ClampMin = "0.0"))
