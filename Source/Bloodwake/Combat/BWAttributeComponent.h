@@ -12,6 +12,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FBWOnAttributeChanged, float, NewVa
 // 스태미나 0 도달 알림 (질주 중단 트리거용)
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FBWOnStaminaDepleted);
 
+// 체력이 0에 도달했을 때 1회 브로드캐스트 (플레이어·적·보스 공용)
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FBWOnDeath);
+
 /**
  * 플레이어·적·보스 공용 자원(Health / Stamina / Focus) 관리 컴포넌트.
  * 소비·회복 API, regen delay + 반복 타이머 회복, 값 변경 델리게이트를 제공한다.
@@ -117,6 +120,10 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Attributes|Stamina")
 	FBWOnStaminaDepleted OnStaminaDepleted;
 
+	/** 체력이 0에 도달했을 때 1회 브로드캐스트. 구독자는 AddDynamic으로 등록한다. */
+	UPROPERTY(BlueprintAssignable, Category = "Attributes|Health")
+	FBWOnDeath OnDeath;
+
 	// ── 튜닝 데이터 (BP 자식에서 설정) ─────────────────────────────
 
 	/** 최대 체력. BP 자식 DefaultsOnly에서 밸런싱. */
@@ -172,4 +179,7 @@ private:
 
 	/** GetWorld()->GetTimeSeconds() 기준 마지막 소비 기록. */
 	float LastConsumeTime = 0.f;
+
+	/** OnDeath 중복 발화 방지 플래그. ApplyDamage에서 1회만 Broadcast한다. */
+	bool bDeathBroadcast = false;
 };

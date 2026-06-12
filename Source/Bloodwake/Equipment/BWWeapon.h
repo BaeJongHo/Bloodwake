@@ -22,6 +22,14 @@ public:
 	/** 무기 슬롯을 반환한다. CombatComponent의 슬롯 라우팅에 사용된다. */
 	virtual EBWEquipSlot GetEquipSlot() const override { return EBWEquipSlot::Weapon; }
 
+	/** 기본 데미지를 반환한다. UBWWeaponCollisionComponent가 데미지 수치를 읽기 위해 사용한다. */
+	UFUNCTION(BlueprintPure, Category = "Weapon|Stats")
+	float GetBaseDamage() const { return BaseDamage; }
+
+	/** 포이즈 데미지를 반환한다. 향후 포이즈 시스템 연동용. */
+	UFUNCTION(BlueprintPure, Category = "Weapon|Stats")
+	float GetPoiseDamage() const { return PoiseDamage; }
+
 protected:
 	/** 기본 데미지. BP 자식에서 밸런싱. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Weapon|Stats", meta = (ClampMin = "0.0"))

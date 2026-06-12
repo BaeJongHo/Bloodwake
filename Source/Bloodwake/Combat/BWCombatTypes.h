@@ -16,3 +16,17 @@ enum class EBWAttachDestination : uint8
 	Hand UMETA(DisplayName = "Hand"),
 	Back UMETA(DisplayName = "Back"),
 };
+
+/**
+ * 피격 방향 4분면.
+ * ShotDirection(공격자→피격자)을 피격자 forward/right 내적으로 분류한다.
+ * ABWEnemy::ComputeHitDirection 에서 사용한다.
+ */
+UENUM(BlueprintType)
+enum class EBWHitDirection : uint8
+{
+	Front UMETA(DisplayName = "Front"),
+	Back  UMETA(DisplayName = "Back"),
+	Left  UMETA(DisplayName = "Left"),
+	Right UMETA(DisplayName = "Right"),
+};

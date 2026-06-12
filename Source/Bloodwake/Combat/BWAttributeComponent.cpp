@@ -146,7 +146,13 @@ void UBWAttributeComponent::ApplyDamage(float Amount)
 	CurrentHealth = FMath::Max(0.f, CurrentHealth - Amount);
 	OnHealthChanged.Broadcast(CurrentHealth, MaxHealth);
 
-	// TODO(2단계): 사망 처리, 포이즈 계산 등 추가 예정
+	// 사망 판정: 체력 0 도달 시 OnDeath를 1회만 발화한다.
+	// 포이즈 계산은 후속 작업(TODO)으로 유지.
+	if (FMath::IsNearlyZero(CurrentHealth) && !bDeathBroadcast)
+	{
+		bDeathBroadcast = true;
+		OnDeath.Broadcast();
+	}
 }
 
 // ── 조회 헬퍼 ────────────────────────────────────────────────────────────────
