@@ -18,27 +18,25 @@ UBWLockOnWidgetComponent::UBWLockOnWidgetComponent()
 	SetVisibility(false);
 	SetHiddenInGame(true);
 
-	// Screen 모드 위젯은 매 프레임 TickComponent에서 화면 좌표 레이어(SWorldWidgetScreenLayer)에
-	// 자신을 등록하고 스크린 위치를 갱신한다. 따라서 Tick이 꺼져 있으면 위젯이 화면에 렌더되지 않는다.
-	// 다만 마커가 보이는 동안에만 Tick을 켜서 평소 비용을 0으로 둔다(CLAUDE.md 4.1 규약).
+	// Screen 위젯의 화면 레이어(SWorldWidgetScreenLayer) "등록/해제"는 UWidgetComponent::TickComponent
+	// → UpdateWidget() → UpdateWidgetOnScreen()에서 SetVisibility 상태를 보고 수행된다.
+	// 따라서 표시/숨김이 반영되려면 컴포넌트 Tick이 살아 있어야 한다. Tick을 끄면 HideMarker가
+	// 레이어에서 위젯을 제거하지 못해 이전 타깃 마커가 화면에 남는다(타깃 전환 시 마커 누적 버그).
+	// 위젯의 매 프레임 화면 위치 갱신은 화면 레이어가 자체 Tick으로 처리하므로 이 Tick은 가볍다.
 	PrimaryComponentTick.bCanEverTick = true;
-	PrimaryComponentTick.bStartWithTickEnabled = false;
+	PrimaryComponentTick.bStartWithTickEnabled = true;
 }
 
 void UBWLockOnWidgetComponent::ShowMarker()
 {
+	// SetVisibility가 true가 되면 다음 Tick에 화면 레이어로 등록되어 마커가 나타난다.
 	SetVisibility(true);
 	SetHiddenInGame(false);
-
-	// Screen 좌표 레이어 등록/위치 갱신을 위해 Tick을 켠다.
-	SetComponentTickEnabled(true);
 }
 
 void UBWLockOnWidgetComponent::HideMarker()
 {
+	// SetVisibility가 false가 되면 다음 Tick에 화면 레이어에서 제거되어 마커가 사라진다.
 	SetVisibility(false);
 	SetHiddenInGame(true);
-
-	// 숨김 동안에는 Tick 불필요 — 비활성화로 비용 절약.
-	SetComponentTickEnabled(false);
 }
