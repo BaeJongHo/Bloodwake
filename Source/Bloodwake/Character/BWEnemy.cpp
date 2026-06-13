@@ -8,7 +8,10 @@
 #include "Engine/DamageEvents.h"
 #include "Kismet/GameplayStatics.h"
 #include "Combat/BWAttributeComponent.h"
+#include "Combat/BWTargetingCollisionComponent.h"
+#include "Combat/BWLockOnWidgetComponent.h"
 #include "Character/BWStateComponent.h"
+#include "Core/BWGameplayDefine.h"
 
 ABWEnemy::ABWEnemy()
 {
@@ -20,6 +23,14 @@ ABWEnemy::ABWEnemy()
 
 	// StateComponent — 행동 상태(GameplayTag) 관리
 	StateComponent = CreateDefaultSubobject<UBWStateComponent>(TEXT("StateComponent"));
+
+	// TargetingCollision — 락온 스윕이 맞히는 구체 형상. 루트에 부착(메시 기준 높이는 BP에서 조정).
+	TargetingCollision = CreateDefaultSubobject<UBWTargetingCollisionComponent>(TEXT("TargetingCollision"));
+	TargetingCollision->SetupAttachment(RootComponent);
+
+	// LockOnWidget — Screen-space 락온 마커. 기본 숨김, 타깃 시 ShowMarker 호출.
+	LockOnWidget = CreateDefaultSubobject<UBWLockOnWidgetComponent>(TEXT("LockOnWidget"));
+	LockOnWidget->SetupAttachment(RootComponent);
 }
 
 void ABWEnemy::BeginPlay()
@@ -42,6 +53,46 @@ void ABWEnemy::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	}
 
 	Super::EndPlay(EndPlayReason);
+}
+
+// ── IBWTargetingInterface 구현 ────────────────────────────────────────────────
+
+bool ABWEnemy::CanBeTargeted() const
+{
+	// 사망 플래그 또는 Death 상태 태그가 있으면 타깃 불가.
+	if (bIsDead)
+	{
+		return false;
+	}
+
+	if (IsValid(StateComponent) && StateComponent->HasStateTag(BWGameplayTags::Character_State_Death.GetTag()))
+	{
+		return false;
+	}
+
+	return true;
+}
+
+UBWTargetingCollisionComponent* ABWEnemy::GetTargetingCollisionComponent() const
+{
+	return TargetingCollision;
+}
+
+UBWLockOnWidgetComponent* ABWEnemy::GetLockOnWidgetComponent() const
+{
+	return LockOnWidget;
+}
+
+FVector ABWEnemy::GetTargetFocusLocation() const
+{
+	if (IsValid(TargetingCollision))
+	{
+		return TargetingCollision->GetComponentLocation();
+	}
+
+	// 폴백: 액터 위치에서 캡슐 절반 높이만큼 올린 가슴 높이 근사값
+	return GetActorLocation() + FVector(0.f, 0.f, GetCapsuleComponent() ?
+		GetCapsuleComponent()->GetScaledCapsuleHalfHeight() * 0.6f : 80.f);
 }
 
 // ── TakeDamage 오버라이드 ─────────────────────────────────────────────────────
@@ -217,10 +268,26 @@ void ABWEnemy::EnableRagdoll()
 	// 1) 사망 플래그 설정 (이후 TakeDamage 재진입 차단)
 	bIsDead = true;
 
-	// 2) 진행 중인 행동 상태 태그 모두 해제
+	// 2) 진행 중인 행동 상태 태그 모두 해제 후 Death 태그 부착.
+	//    ClearAllStateTags 이후 Death를 부착해야 CanBeTargeted()가 사망을 올바르게 감지한다.
 	if (StateComponent)
 	{
 		StateComponent->ClearAllStateTags();
+		StateComponent->AddStateTag(BWGameplayTags::Character_State_Death.GetTag());
+	}
+
+	// 락온 마커 숨기기 — 사망한 적에게 마커가 남지 않도록.
+	// TargetingComponent의 ValidateCurrentTarget이 CanBeTargeted==false로 자동 EndLockOn을 하지만,
+	// 동일 프레임 타이밍 차이로 한 프레임 마커가 보일 수 있어 여기서도 명시적으로 숨긴다.
+	if (IsValid(LockOnWidget))
+	{
+		LockOnWidget->HideMarker();
+	}
+
+	// 사망 시 Targeting 콜리전 비활성화 — 죽은 적이 재탐색 후보에 포함되지 않도록.
+	if (IsValid(TargetingCollision))
+	{
+		TargetingCollision->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	}
 
 	// 3) 진행 중인 몽타주 정지 (히트 리액션이 랙돌과 충돌하지 않도록)

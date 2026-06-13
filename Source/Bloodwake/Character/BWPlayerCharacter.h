@@ -15,6 +15,7 @@ class UBWAttributeComponent;
 class UBWStateComponent;
 class UBWCombatComponent;
 class UBWAttackComponent;
+class UBWTargetingComponent;
 class UAnimMontage;
 struct FInputActionValue;
 
@@ -59,9 +60,36 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Combat|Attack")
 	bool IsAttacking() const;
 
+	/**
+	 * 현재 락온 중인지 반환한다. AnimInstance / BP에서 조회한다.
+	 * TargetingComponent->IsLockedOn()에 위임한다.
+	 * Thread-safe: 캐시된 bool(bIsLockedOnCached)을 반환해 워커 스레드(AnimInstance) 안전.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Combat|LockOn")
+	bool IsLockedOn() const;
+
+	/**
+	 * TargetingComponent에서 락온 상태 변경 시 호출한다.
+	 * bIsLockedOnCached를 갱신해 AnimInstance가 게임스레드 bool만 읽도록 한다(레이스 컨디션 방지).
+	 * 외부에서 직접 호출하지 않는다 — TargetingComponent 전용.
+	 */
+	void SetIsLockedOnCached(bool bInIsLockedOn)
+	{
+		bIsLockedOnCached = bInIsLockedOn;
+	}
+
 protected:
 	/** MoveAction 콜백: 컨트롤러 Yaw 기준으로 입력 벡터를 월드 이동 방향으로 변환해 이동한다. 구르기/공격 중에는 무시한다. */
 	void Move(const FInputActionValue& Value);
+
+	/** LockOnAction(Started) 콜백 — IA_LockOn 누르는 순간. TargetingComponent->ToggleLockOn()에 위임한다. */
+	void OnLockOn(const FInputActionValue& Value);
+
+	/**
+	 * SwitchTargetAction(Triggered) 콜백 — IA_SwitchTarget 입력.
+	 * 입력 X축 값을 추출해 TargetingComponent->SwitchTargetWithDirection에 위임한다.
+	 */
+	void OnSwitchTarget(const FInputActionValue& Value);
 
 	// ── 공격 입력 콜백 ──────────────────────────────────────────────
 
@@ -244,6 +272,20 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> HeavyAttackAction;
 
+	/**
+	 * 락온 토글 입력 액션. BP 자식에서 IA_LockOn 에셋을 지정한다.
+	 * 누르는 순간 1회(Started) 발동 — 락온 ON/OFF 토글.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Input")
+	TObjectPtr<UInputAction> LockOnAction;
+
+	/**
+	 * 타깃 전환 입력 액션. BP 자식에서 IA_SwitchTarget 에셋을 지정한다.
+	 * Axis1D(좌/우). 락온 중에만 유효하다.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Input")
+	TObjectPtr<UInputAction> SwitchTargetAction;
+
 	// ── 컴포넌트 ────────────────────────────────────────────────────
 
 	/** Health / Stamina / Focus 자원 관리 컴포넌트. */
@@ -261,6 +303,13 @@ protected:
 	/** 공격(콤보) 로직을 담당하는 컴포넌트. DataTable에서 몽타주·스태미나를 설정한다. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat")
 	TObjectPtr<UBWAttackComponent> AttackComponent;
+
+	/**
+	 * 락온 타겟팅 컴포넌트. 후보 수집·타깃 선택·카메라 보간·스트레이프 전환을 담당한다.
+	 * BP 자식의 "(상속됨)" 컴포넌트에서 거리/각도/보간속도 등을 튜닝한다.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat")
+	TObjectPtr<UBWTargetingComponent> TargetingComponent;
 
 	// ── 인터랙션 튜닝 데이터 (BP 자식에서 설정) ─────────────────────
 
@@ -331,4 +380,11 @@ private:
 
 	/** 스태미나 소모 반복 타이머 핸들. */
 	FTimerHandle SprintDrainTimerHandle;
+
+	/**
+	 * 락온 상태 캐시 bool. AnimInstance(워커 스레드)가 IsLockedOn() 대신 이 값을 읽어
+	 * WeakPtr 유효성 검사 없이 안전하게 락온 여부를 조회한다.
+	 * TargetingComponent가 StartLockOn/EndLockOn 시 SetIsLockedOnCached를 통해 갱신한다.
+	 */
+	bool bIsLockedOnCached = false;
 };

@@ -5,10 +5,13 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "Combat/BWCombatTypes.h"
+#include "Combat/BWTargetingInterface.h"
 #include "BWEnemy.generated.h"
 
 class UBWAttributeComponent;
 class UBWStateComponent;
+class UBWTargetingCollisionComponent;
+class UBWLockOnWidgetComponent;
 class UAnimMontage;
 class UParticleSystem;
 class USoundBase;
@@ -22,7 +25,7 @@ class USoundBase;
  * 1단계: GAS 미적용, 싱글플레이 전용.
  */
 UCLASS(Blueprintable)
-class BLOODWAKE_API ABWEnemy : public ACharacter
+class BLOODWAKE_API ABWEnemy : public ACharacter, public IBWTargetingInterface
 {
 	GENERATED_BODY()
 
@@ -36,6 +39,26 @@ public:
 	 */
 	virtual float TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent,
 		AController* EventInstigator, AActor* DamageCauser) override;
+
+	// ── IBWTargetingInterface 구현 ───────────────────────────────────────
+
+	/**
+	 * 현재 타깃 가능 여부. bIsDead 또는 Character_State_Death 태그 보유 시 false.
+	 * UBWTargetingComponent가 후보 필터/유효성 검사에서 매 틱 호출한다.
+	 */
+	virtual bool CanBeTargeted() const override;
+
+	/** 락온 스윕이 맞히는 구체 콜리전 컴포넌트를 반환한다. */
+	virtual UBWTargetingCollisionComponent* GetTargetingCollisionComponent() const override;
+
+	/** 락온 마커 위젯 컴포넌트를 반환한다. */
+	virtual UBWLockOnWidgetComponent* GetLockOnWidgetComponent() const override;
+
+	/**
+	 * 카메라가 바라볼 월드 위치(가슴 높이 기준).
+	 * TargetingCollisionComponent 위치를 반환하고, 없으면 액터 위치 + 높이 오프셋 반환.
+	 */
+	virtual FVector GetTargetFocusLocation() const override;
 
 protected:
 	virtual void BeginPlay() override;
@@ -54,6 +77,20 @@ protected:
 	/** 현재 행동 상태를 GameplayTag로 관리하는 컴포넌트. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "State")
 	TObjectPtr<UBWStateComponent> StateComponent;
+
+	/**
+	 * 락온 스윕이 맞히는 구체 형상 컴포넌트. Targeting 채널(ECC_GameTraceChannel1)에 Block.
+	 * 반경/위치(가슴 높이)는 BP 자식(BP_BWEnemy)의 "(상속됨)" 컴포넌트에서 튜닝한다.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat|LockOn")
+	TObjectPtr<UBWTargetingCollisionComponent> TargetingCollision;
+
+	/**
+	 * Screen-space 락온 마커 위젯 컴포넌트. 타깃 선택 시 ShowMarker(), 해제 시 HideMarker().
+	 * Widget Class는 BP 자식의 "(상속됨)" 컴포넌트에서 WBP_LockOn으로 지정한다.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat|LockOn")
+	TObjectPtr<UBWLockOnWidgetComponent> LockOnWidget;
 
 	// ── BP 설정용 — 4방향 히트 리액션 몽타주 ──────────────────────────
 

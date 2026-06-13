@@ -1,9 +1,9 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 
-#include "BWPlayerAnimInstance.h"
+#include "Character/BWPlayerAnimInstance.h"
 
-#include "BWPlayerCharacter.h"
+#include "Character/BWPlayerCharacter.h"
 #include "GameFramework/CharacterMovementComponent.h"
 
 UBWPlayerAnimInstance::UBWPlayerAnimInstance()
@@ -62,6 +62,9 @@ void UBWPlayerAnimInstance::NativeThreadSafeUpdateAnimation(float DeltaSeconds)
 
 	// 이동 중이면서 임계 속도 이하면 걷기로 분류한다.
 	bIsWalking = bShouldMove && GroundSpeed <= WalkSpeedThreshold;
+
+	// 락온 상태 pull. OwningCharacter->IsLockedOn()은 캐시된 bool을 반환하므로 워커 스레드 안전.
+	bIsLockedOn = OwningCharacter->IsLockedOn();
 
 	// 액터 전방 기준 이동 방향(도). 스트레이프 블렌드스페이스용으로 직접 계산해
 	// AnimGraphRuntime(UKismetAnimationLibrary) 의존성을 추가하지 않는다.

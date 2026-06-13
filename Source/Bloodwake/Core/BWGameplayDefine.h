@@ -18,6 +18,8 @@ namespace BWGameplayTags
 	/** 구르기(Roll) 상태 태그. 문자열: "Character.State.Roll" */
 	BLOODWAKE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Character_State_Roll);
 
+	BLOODWAKE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Character_State_Death);
+
 	/** 장착(Equip) 액션 태그. 무기/방패 뽑기 모션이 진행 중임을 나타낸다. 문자열: "Character.Action.Equip" */
 	BLOODWAKE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Character_Action_Equip);
 

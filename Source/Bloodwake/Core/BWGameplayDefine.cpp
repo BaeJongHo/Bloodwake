@@ -7,6 +7,7 @@ namespace BWGameplayTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Character_State_Normal, "Character.State.Normal", "기본(Normal) 상태");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Character_State_Sprint, "Character.State.Sprint", "질주(Sprint) 상태");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Character_State_Roll,   "Character.State.Roll",   "구르기(Roll) 상태");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Character_State_Death, "Character.State.Death",   "죽은(Death) 상태");
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Character_Action_Equip,   "Character.Action.Equip",   "장착(무기/방패 뽑기) 행동 진행 중");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Character_Action_Unequip, "Character.Action.Unequip", "해제(무기/방패 넣기) 행동 진행 중");

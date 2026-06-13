@@ -13,6 +13,7 @@
 #include "Combat/BWAttributeComponent.h"
 #include "Combat/BWCombatComponent.h"
 #include "Combat/BWAttackComponent.h"
+#include "Combat/BWTargetingComponent.h"
 #include "Character/BWStateComponent.h"
 #include "Core/BWGameplayDefine.h"
 #include "Equipment/BWPickUpItem.h"
@@ -60,6 +61,9 @@ ABWPlayerCharacter::ABWPlayerCharacter()
 
 	// AttackComponent 생성·부착. 공격(콤보) 로직을 담당한다.
 	AttackComponent = CreateDefaultSubobject<UBWAttackComponent>(TEXT("AttackComponent"));
+
+	// TargetingComponent 생성·부착. 락온 타겟팅 로직을 담당한다. Tick은 기본 비활성.
+	TargetingComponent = CreateDefaultSubobject<UBWTargetingComponent>(TEXT("TargetingComponent"));
 }
 
 void ABWPlayerCharacter::BeginPlay()
@@ -178,6 +182,19 @@ void ABWPlayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputC
 			// IA_HeavyAttack: Started(누르는 순간) → Heavy.
 			EnhancedInput->BindAction(HeavyAttackAction, ETriggerEvent::Started, this, &ABWPlayerCharacter::OnHeavyAttack);
 		}
+
+		if (LockOnAction)
+		{
+			// IA_LockOn: Started(누르는 순간) → 락온 토글.
+			EnhancedInput->BindAction(LockOnAction, ETriggerEvent::Started, this, &ABWPlayerCharacter::OnLockOn);
+		}
+
+		if (SwitchTargetAction)
+		{
+			// IA_SwitchTarget: Started(입력이 문턱을 넘는 순간 1회) → 타깃 전환. 락온 중에만 유효.
+			// Triggered가 아닌 Started를 쓰는 이유: 마우스 플릭/스틱/키 홀드 모두 "한 제스처 = 한 칸 전환"으로 만들기 위함.
+			EnhancedInput->BindAction(SwitchTargetAction, ETriggerEvent::Started, this, &ABWPlayerCharacter::OnSwitchTarget);
+		}
 	}
 }
 
@@ -209,6 +226,11 @@ void ABWPlayerCharacter::Move(const FInputActionValue& Value)
 
 void ABWPlayerCharacter::Look(const FInputActionValue& Value)
 {
+	if (IsLockedOn())
+	{
+		return;
+	}
+
 	const FVector2D LookAxisVector = Value.Get<FVector2D>();
 
 	AddControllerYawInput(LookAxisVector.X);
@@ -430,6 +452,39 @@ void ABWPlayerCharacter::EndRoll()
 		// Roll 태그 해제 → StateComponent가 행동 상태 부재를 감지해 Normal로 자동 복귀시킨다.
 		StateComponent->RemoveStateTag(BWGameplayTags::Character_State_Roll.GetTag());
 	}
+}
+
+bool ABWPlayerCharacter::IsLockedOn() const
+{
+	return bIsLockedOnCached;
+}
+
+void ABWPlayerCharacter::OnLockOn(const FInputActionValue& /*Value*/)
+{
+	if (!IsValid(TargetingComponent))
+	{
+		return;
+	}
+
+	// TargetingComponent 내부의 StartLockOn/EndLockOn에서 SetIsLockedOnCached를 호출해 동기화된다.
+	TargetingComponent->ToggleLockOn();
+}
+
+void ABWPlayerCharacter::OnSwitchTarget(const FInputActionValue& Value)
+{
+	if (!IsValid(TargetingComponent))
+	{
+		return;
+	}
+
+	if (IsLockedOn() == false)
+	{
+		return;
+	}
+
+	// Axis1D 값 추출 (좌: 음수, 우: 양수)
+	const float AxisX = Value.Get<float>();
+	TargetingComponent->SwitchTargetWithDirection(AxisX);
 }
 
 bool ABWPlayerCharacter::CanSprint() const

@@ -76,6 +76,14 @@ protected:
 	UPROPERTY(BlueprintReadOnly, Category = "Locomotion", meta = (AllowPrivateAccess = "true"))
 	bool bIsJumping = false;
 
+	/**
+	 * 현재 락온 중인지 여부. ABP에서 스트레이프 블렌드스페이스 전환 조건으로 사용한다.
+	 * NativeThreadSafeUpdateAnimation에서 OwningCharacter->IsLockedOn()(캐시 bool)을 pull한다.
+	 * Thread-safe: 캐시된 bool을 읽어 워커 스레드 안전.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Locomotion", meta = (AllowPrivateAccess = "true"))
+	bool bIsLockedOn = false;
+
 protected:
 	/** bShouldMove 판정 기준 속도(cm/s). 이 값 이하의 미세 속도는 이동으로 보지 않는다. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Locomotion|Config", meta = (AllowPrivateAccess = "true", ClampMin = "0.0"))
