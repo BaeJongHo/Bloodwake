@@ -56,6 +56,7 @@ struct BLOODWAKE_API FBWComboStep
  * DataTable Row 구조체. RowName = 공격 종류(Light/Running/Special/Heavy).
  * 콤보 단계 목록을 TArray로 보유한다.
  * 단발 공격(Running/Special)은 Steps 원소 1개, 콤보(Light/Heavy)는 4개 이상.
+ * 장착/해제(Equip/Unequip)는 Steps 원소 1개만 사용한다.
  */
 USTRUCT(BlueprintType)
 struct BLOODWAKE_API FBWAttackComboRow : public FTableRowBase
@@ -66,3 +67,16 @@ struct BLOODWAKE_API FBWAttackComboRow : public FTableRowBase
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combo")
 	TArray<FBWComboStep> Steps;
 };
+
+/**
+ * DataTable RowName 상수. 하드코딩 산재 방지를 위해 중앙 정의한다.
+ * 공격 행(Light/Running/Special/Heavy)은 GetRowNameForAttackType(enum→FName) 참조.
+ * 장착/해제 행은 아래 상수를 직접 사용한다.
+ */
+namespace BWAttackRowNames
+{
+	/** 무기 뽑기(등→손) DataTable 행 키. FBWAttackComboRow.Steps[0].Montage가 장착 몽타주. */
+	inline const FName Equip   = FName(TEXT("Equip"));
+	/** 무기 넣기(손→등) DataTable 행 키. FBWAttackComboRow.Steps[0].Montage가 해제 몽타주. */
+	inline const FName Unequip = FName(TEXT("Unequip"));
+}

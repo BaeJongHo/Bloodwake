@@ -6,15 +6,21 @@
 #include "Components/ActorComponent.h"
 #include "BWWeaponCollisionComponent.generated.h"
 
-class UStaticMeshComponent;
+class UPrimitiveComponent;
+class USkeletalMeshComponent;
 class UDamageType;
+class ABWWeapon;
 
 /**
- * 무기 액터에 부착하는 히트 판정 컴포넌트.
- * 감지 ON 동안(StartDetection~StopDetection) 매 틱 Start/End 소켓 사이를 CapsuleSweep 하여
+ * 캐릭터(UBWCombatComponent)가 소유하는 히트 판정 컴포넌트.
+ * 감지 ON 동안(StartDetection~StopDetection) 매 틱 sweep 소스(무기 소켓 또는 손 본)를 CapsuleSweep 하여
  * 피격 액터를 검출하고 TakeDamage(FPointDamageEvent)로 데미지를 전달한다.
  * 한 감지 윈도우 내 동일 액터 중복 타격을 방지(AlreadyHitActors 캐시).
- * 히트 윈도우 제어는 UBWAnimNotifyState_WeaponCollision 이 담당한다.
+ * 히트 윈도우 제어는 UBWAnimNotifyState_WeaponCollision이 담당한다.
+ *
+ * sweep 소스와 데미지 소스는 외부에서 주입한다(ConfigureForWeapon / ConfigureForFists / ClearSource).
+ * 무기 전투: 무기 SM 소켓 사이 sweep, 데미지=무기 BaseDamage.
+ * 맨손 전투: 캐릭터 SK 손 본 위치 sweep, 데미지=FistDamage.
  * 1단계: GAS 미적용, 싱글플레이 전용.
  */
 UCLASS(ClassGroup = (Bloodwake), meta = (BlueprintSpawnableComponent))
@@ -28,42 +34,49 @@ public:
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType,
 		FActorComponentTickFunction* ThisTickFunction) override;
 
+	// ── 히트 윈도우 제어 ───────────────────────────────────────────────
+
 	/**
-	 * 히트 윈도우 시작. UBWAnimNotifyState_WeaponCollision::NotifyBegin 에서 호출한다.
-	 * AlreadyHitActors 초기화, PrevLocation 소켓 위치로 시드, Tick ON.
+	 * 히트 윈도우 시작. UBWAnimNotifyState_WeaponCollision::NotifyBegin에서 호출한다.
+	 * AlreadyHitActors 초기화, PrevLocation 소켓/본 위치로 시드, Tick ON.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Combat|WeaponCollision")
 	void StartDetection();
 
 	/**
-	 * 히트 윈도우 종료. UBWAnimNotifyState_WeaponCollision::NotifyEnd 에서 호출한다.
+	 * 히트 윈도우 종료. UBWAnimNotifyState_WeaponCollision::NotifyEnd에서 호출한다.
 	 * Tick OFF, AlreadyHitActors 초기화.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Combat|WeaponCollision")
 	void StopDetection();
 
+	// ── sweep 소스 주입 API ────────────────────────────────────────────
+
 	/**
-	 * MeshComp(캐릭터 스켈레탈 메시) 소유 캐릭터의 장착 무기에서 본 컴포넌트를 찾아 반환하는 정적 헬퍼.
-	 * 노티파이가 호출하며, 무기 미장착/컴포넌트 부재 시 nullptr + Warning 반환.
+	 * sweep 대상을 무기 모드로 설정한다.
+	 * InWeaponMesh의 InStart/InEnd 소켓 사이를 sweep하고, 데미지 소스로 InWeapon을 사용한다.
+	 * UBWCombatComponent::RefreshCombatState가 무기 장착 시 호출한다.
 	 */
-	static UBWWeaponCollisionComponent* FindOnEquippedWeapon(const USkeletalMeshComponent* MeshComp);
+	void ConfigureForWeapon(UPrimitiveComponent* InWeaponMesh, FName InStart, FName InEnd,
+		float InRadius, const ABWWeapon* InWeapon);
 
-protected:
-	virtual void BeginPlay() override;
+	/**
+	 * sweep 대상을 맨손 모드로 설정한다.
+	 * 캐릭터 스켈레탈 메시의 손 본(InHandBone) 위치를 sweep하고,
+	 * 데미지 소스로 InFistDamage를 사용한다.
+	 * 손 본은 단일 지점이므로 Start==End=손 본 위치(구체 sweep)로 처리한다.
+	 * UBWCombatComponent::RefreshCombatState가 맨손 전환 시 호출한다.
+	 */
+	void ConfigureForFists(USkeletalMeshComponent* InCharacterMesh, FName InHandBone,
+		float InRadius, float InFistDamage);
 
-	// ── BP 설정용 — 무기 BP 자식에서 값 지정 ──────────────────────────
+	/**
+	 * 현재 sweep 소스를 비활성(미설정)으로 만든다.
+	 * 전투 타입 전환 직전에 호출해 잘못된 소스로 sweep하는 것을 방지한다.
+	 */
+	void ClearSource();
 
-	/** Sweep 시작 소켓명(칼날 밑동). 무기 SM에 추가된 소켓명과 일치시킨다. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "WeaponCollision|Trace")
-	FName TraceStartSocket = TEXT("trace_start");
-
-	/** Sweep 끝 소켓명(칼끝). */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "WeaponCollision|Trace")
-	FName TraceEndSocket = TEXT("trace_end");
-
-	/** Sweep 캡슐 반경(cm). 칼날 두께에 맞춰 BP에서 튜닝한다. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "WeaponCollision|Trace", meta = (ClampMin = "0.0"))
-	float TraceRadius = 8.f;
+	// ── 디버그/채널 설정 (UPROPERTY — BP에서 조정 가능) ────────────────
 
 	/** Sweep 충돌 채널. 적 캡슐이 반응하는 채널로 설정한다(기본 ECC_Pawn). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "WeaponCollision|Trace")
@@ -79,7 +92,7 @@ protected:
 
 private:
 	/**
-	 * 이전 프레임 Start/End → 현재 프레임 Start/End 보간 Sweep을 수행한다.
+	 * 이전 프레임 위치 → 현재 프레임 위치 보간 Sweep을 수행한다.
 	 * 적중 액터를 AlreadyHitActors로 필터링한 후 ApplyDamageTo를 호출한다.
 	 */
 	void PerformSweep();
@@ -90,10 +103,16 @@ private:
 	void ApplyDamageTo(const FHitResult& Hit);
 
 	/**
-	 * 무기 루트 StaticMeshComponent의 소켓 월드 위치를 반환한다.
-	 * 소켓이 없으면 액터 위치로 폴백 후 1회 Warning 출력.
+	 * 현재 설정된 소스(SourceMesh + SourceStartSocket)에서 시작 소켓 월드 위치를 반환한다.
+	 * 소켓/본이 없으면 컴포넌트 위치로 폴백하고 false를 반환한다.
 	 */
-	bool GetSocketWorldLocation(FName SocketName, FVector& OutLocation) const;
+	bool GetStartSocketWorldLocation(FVector& OutLocation) const;
+
+	/**
+	 * 현재 설정된 소스(SourceMesh + SourceEndSocket)에서 끝 소켓 월드 위치를 반환한다.
+	 * 맨손 모드(Start==End)에서는 GetStartSocketWorldLocation과 동일 위치를 반환한다.
+	 */
+	bool GetEndSocketWorldLocation(FVector& OutLocation) const;
 
 	// ── GC 추적 런타임 상태 ─────────────────────────────────────────────
 
@@ -101,17 +120,62 @@ private:
 	UPROPERTY()
 	TSet<TObjectPtr<AActor>> AlreadyHitActors;
 
-	// ── 원시 런타임 상태 (UObject 아님 — UPROPERTY 불필요) ─────────────
+	// ── sweep 소스 (외부 주입, TWeakObjectPtr) ──────────────────────────
 
-	/** 이전 프레임의 Sweep 시작 소켓 월드 위치. StartDetection에서 현재 위치로 시드. */
+	/**
+	 * sweep 대상 메시. 무기 모드=UStaticMeshComponent(또는 UPrimitiveComponent),
+	 * 맨손 모드=USkeletalMeshComponent. 둘 다 GetSocketLocation을 지원한다.
+	 */
+	TWeakObjectPtr<UPrimitiveComponent> SourceMesh;
+
+	/** sweep 시작 소켓/본 이름. 무기=trace_start, 맨손=손 본 이름(hand_r/hand_l). */
+	FName SourceStartSocket;
+
+	/**
+	 * sweep 끝 소켓/본 이름. 무기=trace_end, 맨손=손 본 이름(Start와 동일).
+	 * 맨손은 단일 점 sweep이므로 Start==End.
+	 */
+	FName SourceEndSocket;
+
+	/** Sweep 캡슐 반경(cm). ConfigureFor* 주입값으로 설정된다. */
+	float SourceRadius = 8.f;
+
+	// ── 데미지 소스 (외부 주입, TWeakObjectPtr / 원시값) ────────────────
+
+	/**
+	 * 무기 모드 데미지 소스. 유효하면 GetBaseDamage() 사용, null이면 FistDamage 사용.
+	 * 소유 관계 없음(약참조). const: 데미지 조회만 하며 무기 상태를 변경하지 않는다.
+	 */
+	TWeakObjectPtr<const ABWWeapon> SourceWeapon;
+
+	/** 맨손 모드 데미지. ConfigureForFists 주입값. SourceWeapon이 null일 때 사용. */
+	float FistDamage = 0.f;
+
+	/**
+	 * 무시할 캐릭터(데미지 instigator/owner 판정용). ConfigureFor* 시점에 GetOwner()로 캐시.
+	 * 약참조(소유 관계 없음).
+	 */
+	TWeakObjectPtr<AActor> OwnerCharacter;
+
+	// ── 원시 런타임 상태 ──────────────────────────────────────────────────
+
+	/** 이전 프레임의 Sweep 시작 위치. StartDetection에서 현재 위치로 시드. */
 	FVector PrevStartLocation = FVector::ZeroVector;
 
-	/** 이전 프레임의 Sweep 끝 소켓 월드 위치. StartDetection에서 현재 위치로 시드. */
+	/** 이전 프레임의 Sweep 끝 위치. StartDetection에서 현재 위치로 시드. */
 	FVector PrevEndLocation = FVector::ZeroVector;
 
 	/** 현재 감지 중인지 여부. */
 	bool bDetecting = false;
 
-	/** BeginPlay에서 캐시한 무기 루트 StaticMeshComponent. */
-	TWeakObjectPtr<UStaticMeshComponent> CachedWeaponMesh;
+	/** sweep 소스가 유효하게 설정돼 있는지 여부. ClearSource 후 false. */
+	bool bSourceConfigured = false;
+
+	/**
+	 * 소켓 미존재 경고를 이미 출력했는지 여부.
+	 * ConfigureForWeapon / ConfigureForFists / ClearSource 시 false로 리셋된다.
+	 * 매 틱 ensure 폭발을 막기 위해 첫 발생 시 1회만 Warning을 출력한다.
+	 * const 메서드(GetStart/EndSocketWorldLocation)에서 갱신하므로 mutable로 선언한다.
+	 */
+	mutable bool bWarnedMissingSocket = false;
 };

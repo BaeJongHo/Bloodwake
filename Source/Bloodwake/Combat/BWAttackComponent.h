@@ -56,6 +56,16 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Combat|Attack")
 	bool IsAttacking() const;
 
+	// ── 활성 DataTable 외부 주입 ──────────────────────────────────────
+
+	/**
+	 * 현재 활성 공격 DataTable을 설정한다.
+	 * UBWCombatComponent가 무기 장착/맨손 전환 시 push한다.
+	 * null이면 공격이 발동하지 않는다(FindRow가 null을 반환해 공격 발동 차단).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Combat|Attack")
+	void SetActiveAttackDataTable(UDataTable* InTable);
+
 	// ── AnimNotifyState / AnimNotify 진입점 ──────────────────────────
 
 	/**
@@ -89,11 +99,12 @@ protected:
 	// ── BP/DataTable 설정용 데이터 ──────────────────────────────────
 
 	/**
-	 * 공격 몽타주·스태미나 테이블. BP 자식에서 DT_PlayerAttacks를 지정한다.
+	 * 현재 활성 공격 DataTable. 외부에서 SetActiveAttackDataTable로 주입된다.
+	 * UBWCombatComponent가 무기 장착 시 무기 DataTable을, 맨손 시 FistAttackDataTable을 push한다.
 	 * RowStruct = FBWAttackComboRow, 행 키 = Light/Running/Special/Heavy.
-	 * 경로 하드코딩 금지(CLAUDE.md 6.3).
+	 * VisibleInstanceOnly로 런타임 주입 상태를 디버그 패널에서 확인할 수 있다.
 	 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Combat|Attack")
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Combat|Attack")
 	TObjectPtr<UDataTable> AttackDataTable;
 
 	/**

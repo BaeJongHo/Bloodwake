@@ -4,10 +4,12 @@
 
 #include "CoreMinimal.h"
 #include "Animation/AnimInstance.h"
+#include "Combat/BWCombatTypes.h"
 #include "BWPlayerAnimInstance.generated.h"
 
 class ABWPlayerCharacter;
 class UCharacterMovementComponent;
+class UBWCombatComponent;
 
 /**
  * ABWPlayerCharacter 전용 애님 인스턴스.
@@ -24,6 +26,12 @@ public:
 	UBWPlayerAnimInstance();
 
 	virtual void NativeInitializeAnimation() override;
+	/**
+	 * 게임 스레드에서 호출된다. CombatComponent의 bIsWeaponDrawn/CurrentCombatType을
+	 * 멤버(CachedWeaponDrawn/CachedCombatType)에 미리 캐시한다.
+	 * NativeThreadSafeUpdateAnimation은 이 캐시값만 읽어 워커 스레드 안전을 보장한다.
+	 */
+	virtual void NativeUpdateAnimation(float DeltaSeconds) override;
 	virtual void NativeThreadSafeUpdateAnimation(float DeltaSeconds) override;
 
 	/**
@@ -84,7 +92,22 @@ protected:
 	UPROPERTY(BlueprintReadOnly, Category = "Locomotion", meta = (AllowPrivateAccess = "true"))
 	bool bIsLockedOn = false;
 
-protected:
+	/**
+	 * 손에 무기를 들고 있는지. ABP 무기/맨손 로코모션 분기.
+	 * NativeThreadSafeUpdateAnimation에서 CachedCombatComponent->IsWeaponDrawn()을 pull한다.
+	 * Thread-safe: CombatComponent가 갱신하는 POD bool을 읽는다(bIsLockedOn 선례 준수).
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Combat", meta = (AllowPrivateAccess = "true"))
+	bool bIsWeaponDrawn = false;
+
+	/**
+	 * 현재 전투 형태. ABP 무기 종류별 포즈/블렌드 분기.
+	 * NativeThreadSafeUpdateAnimation에서 CachedCombatComponent->GetCurrentCombatType()을 pull한다.
+	 * Thread-safe: CombatComponent가 갱신하는 POD enum을 읽는다(bIsLockedOn 선례 준수).
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Combat", meta = (AllowPrivateAccess = "true"))
+	EBWCombatType CurrentCombatType = EBWCombatType::MeleeFists;
+
 	/** bShouldMove 판정 기준 속도(cm/s). 이 값 이하의 미세 속도는 이동으로 보지 않는다. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Locomotion|Config", meta = (AllowPrivateAccess = "true", ClampMin = "0.0"))
 	float MovingSpeedThreshold = 3.0f;
@@ -92,4 +115,19 @@ protected:
 	/** 걷기/달리기 구분 기준 속도(cm/s). 이 값 이하면 걷기로 본다. 무기·상태별 보행 속도에 맞춰 조정한다. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Locomotion|Config", meta = (AllowPrivateAccess = "true", ClampMin = "0.0"))
 	float WalkSpeedThreshold = 165.0f;
+
+private:
+	/**
+	 * 소유 캐릭터의 CombatComponent 캐시. NativeInitializeAnimation에서 1회 취득.
+	 * 약참조이므로 사용 전 IsValid 확인 필수.
+	 */
+	TWeakObjectPtr<UBWCombatComponent> CachedCombatComponent;
+
+	/**
+	 * 게임 스레드(NativeUpdateAnimation)에서 CombatComponent 값을 미리 읽어 두는 캐시.
+	 * NativeThreadSafeUpdateAnimation(워커 스레드)은 이 값만 복사해 스레드 안전을 보장한다.
+	 * bIsLockedOn이 OwningCharacter->IsLockedOn() 캐시 bool을 pull하는 방식과 동일한 패턴.
+	 */
+	bool bCachedWeaponDrawn = false;
+	EBWCombatType CachedCombatType = EBWCombatType::MeleeFists;
 };

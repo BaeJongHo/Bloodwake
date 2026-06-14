@@ -1,9 +1,9 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
-
 #include "Character/BWPlayerAnimInstance.h"
 
 #include "Character/BWPlayerCharacter.h"
+#include "Combat/BWCombatComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 
 UBWPlayerAnimInstance::UBWPlayerAnimInstance()
@@ -19,6 +19,22 @@ void UBWPlayerAnimInstance::NativeInitializeAnimation()
 	if (OwningCharacter)
 	{
 		MovementComponent = OwningCharacter->GetCharacterMovement();
+
+		// CombatComponent를 1회 캐시한다. bIsWeaponDrawn/CurrentCombatType pull에 사용.
+		CachedCombatComponent = OwningCharacter->FindComponentByClass<UBWCombatComponent>();
+	}
+}
+
+void UBWPlayerAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
+{
+	Super::NativeUpdateAnimation(DeltaSeconds);
+
+	// 게임 스레드에서만 CombatComponent에 접근해 캐시를 갱신한다.
+	// NativeThreadSafeUpdateAnimation(워커 스레드)은 이 캐시값을 읽어 스레드 안전을 보장한다.
+	if (CachedCombatComponent.IsValid())
+	{
+		bCachedWeaponDrawn = CachedCombatComponent->IsWeaponDrawn();
+		CachedCombatType   = CachedCombatComponent->GetCurrentCombatType();
 	}
 }
 
@@ -65,6 +81,11 @@ void UBWPlayerAnimInstance::NativeThreadSafeUpdateAnimation(float DeltaSeconds)
 
 	// 락온 상태 pull. OwningCharacter->IsLockedOn()은 캐시된 bool을 반환하므로 워커 스레드 안전.
 	bIsLockedOn = OwningCharacter->IsLockedOn();
+
+	// 전투 상태 pull. NativeUpdateAnimation(게임 스레드)에서 미리 캐시해 둔 값을 복사한다.
+	// CombatComponent에 직접 접근하지 않아 워커 스레드 안전(bIsLockedOn 선례와 동일한 패턴).
+	bIsWeaponDrawn    = bCachedWeaponDrawn;
+	CurrentCombatType = CachedCombatType;
 
 	// 액터 전방 기준 이동 방향(도). 스트레이프 블렌드스페이스용으로 직접 계산해
 	// AnimGraphRuntime(UKismetAnimationLibrary) 의존성을 추가하지 않는다.

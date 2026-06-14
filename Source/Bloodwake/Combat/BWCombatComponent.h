@@ -9,10 +9,14 @@
 #include "BWCombatComponent.generated.h"
 
 class ABWEquipItem;
+class ABWWeapon;
 class ABWPickUpItem;
 class USkeletalMeshComponent;
 class UBWStateComponent;
+class UBWAttackComponent;
+class UBWWeaponCollisionComponent;
 class UAnimMontage;
+class UDataTable;
 class ACharacter;
 
 /**
@@ -23,6 +27,10 @@ class ACharacter;
  * 무기 슬롯과 방패 슬롯을 독립 운용한다. 각 슬롯은 손/등 소켓을 별도로 보유한다.
  * 슬롯별 토글(ToggleWeapon / ToggleShield)은 장착/해제 몽타주를 재생하며,
  * 몽타주 중간의 UBWAnimNotify_AttachEquip 노티파이 시점에 실제 소켓 이동이 일어난다.
+ *
+ * 히트 콜리전(Main/Second UBWWeaponCollisionComponent)을 직접 소유·관리한다.
+ * 무기 장착 시 무기 소켓으로, 맨손 시 손 본으로 sweep 소스를 전환(RefreshCombatState).
+ * 전투 타입(EBWCombatType)의 SSOT로서 AnimInstance가 로코모션 분기에 사용한다.
  */
 UCLASS(Blueprintable, ClassGroup = (Bloodwake), meta = (BlueprintSpawnableComponent))
 class BLOODWAKE_API UBWCombatComponent : public UActorComponent
@@ -33,6 +41,7 @@ public:
 	UBWCombatComponent();
 
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	// ── 장비 API ────────────────────────────────────────────────────────
 
@@ -49,6 +58,7 @@ public:
 	/**
 	 * 무기 슬롯의 손↔등 상태를 토글한다.
 	 * 현재 손에 들고 있으면 등으로, 등에 보관 중이면 손으로 전환.
+	 * 공격 중(IsAttacking)이면 무시(콤보 중 DataTable 스왑 방지).
 	 * 장착/해제 몽타주를 재생하고, 노티파이 시점에 실제 소켓 이동이 일어난다.
 	 * 몽타주 미설정 시 즉시 부착 + Warning 로그로 폴백한다.
 	 */
@@ -58,6 +68,7 @@ public:
 	/**
 	 * 방패 슬롯의 손↔등 상태를 토글한다.
 	 * 현재 손에 들고 있으면 등으로, 등에 보관 중이면 손으로 전환.
+	 * 양손 무기(TwoHanded)가 손에 있을 경우 무시(방패 차단).
 	 * 장착/해제 몽타주를 재생하고, 노티파이 시점에 실제 소켓 이동이 일어난다.
 	 * 몽타주 미설정 시 즉시 부착 + Warning 로그로 폴백한다.
 	 */
@@ -86,34 +97,42 @@ public:
 	 */
 	void AttachSlotToSocket(EBWEquipSlot Slot, EBWAttachDestination Destination);
 
+	// ── 전투 타입 SSOT ──────────────────────────────────────────────────
+
+	/** 현재 전투 형태를 반환한다. AnimInstance 로코모션 분기에 사용한다. */
+	UFUNCTION(BlueprintPure, Category = "Combat|State")
+	EBWCombatType GetCurrentCombatType() const { return CurrentCombatType; }
+
+	// ── 히트 콜리전 슬롯 접근자 ─────────────────────────────────────────
+
+	/**
+	 * selector에 맞는 히트 콜리전 컴포넌트를 반환한다.
+	 * UBWAnimNotifyState_WeaponCollision의 NotifyBegin/End가 호출해 히트 윈도우를 제어한다.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Combat|Collision")
+	UBWWeaponCollisionComponent* GetCollisionForSlot(EBWWeaponSlotSelector Slot) const;
+
 protected:
 	// ── 소켓명 (캐릭터 스켈레톤 본 이름, BP 자식에서 실제 값 지정) ────
 
 	/** 무기 손(장착) 소켓명. 캐릭터 스켈레톤에 추가한 소켓명과 일치해야 한다. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Sockets")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Combat|Sockets")
 	FName WeaponHandSocketName = TEXT("hand_r_weapon");
 
 	/** 무기 등(보관) 소켓명. 캐릭터 스켈레톤에 추가한 소켓명과 일치해야 한다. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Sockets")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Combat|Sockets")
 	FName WeaponBackSocketName = TEXT("spine_weapon");
 
 	/** 방패 손(장착) 소켓명. 캐릭터 스켈레톤에 추가한 소켓명과 일치해야 한다. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Sockets")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Combat|Sockets")
 	FName ShieldHandSocketName = TEXT("hand_l_shield");
 
 	/** 방패 등(보관) 소켓명. 캐릭터 스켈레톤에 추가한 소켓명과 일치해야 한다. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Sockets")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Combat|Sockets")
 	FName ShieldBackSocketName = TEXT("spine_shield");
 
-	// ── 장착/해제 몽타주 (BP 자식에서 슬롯별로 지정) ─────────────────
-
-	/** 무기 뽑기(등→손) 몽타주. BP 자식에서 AM_EquipWeapon 에셋을 지정한다. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Combat|Equip Montage")
-	TObjectPtr<UAnimMontage> EquipWeaponMontage;
-
-	/** 무기 넣기(손→등) 몽타주. BP 자식에서 AM_UnequipWeapon 에셋을 지정한다. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Combat|Equip Montage")
-	TObjectPtr<UAnimMontage> UnequipWeaponMontage;
+	// ── 방패 장착/해제 몽타주 (BP 자식에서 지정) ─────────────────────
+	// ※ 무기 Equip/Unequip 몽타주는 무기 DataTable(Equip/Unequip 행)에서 조회한다.
 
 	/** 방패 들기(등→손) 몽타주. BP 자식에서 AM_EquipShield 에셋을 지정한다. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Combat|Equip Montage")
@@ -160,6 +179,61 @@ protected:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Combat|Equipment")
 	TSubclassOf<ABWEquipItem> DefaultEquipItemClass;
 
+	// ── 맨손 데이터 (BP 자식에서 설정) ──────────────────────────────────
+
+	/**
+	 * 맨손 공격 DataTable. 무기가 없을 때 AttackComponent에 push된다.
+	 * RowStruct = FBWAttackComboRow, 행 키 = Light/Running/Special/Heavy.
+	 * BP 자식에서 DT_FistAttacks 에셋을 지정한다(경로 하드코딩 금지).
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Combat|Fists")
+	TObjectPtr<UDataTable> FistAttackDataTable;
+
+	/** 맨손 1타 기본 데미지. 무기 없을 때 Main/Second 콜리전 데미지 소스. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Combat|Fists", meta = (ClampMin = "0.0"))
+	float FistBaseDamage = 5.f;
+
+	/** 맨손 포이즈 데미지(후속 포이즈 시스템 연동용). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Combat|Fists", meta = (ClampMin = "0.0"))
+	float FistPoiseDamage = 0.f;
+
+	/** 맨손 sweep 구체 반경(cm). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Combat|Fists", meta = (ClampMin = "0.0"))
+	float FistTraceRadius = 10.f;
+
+	/** 오른손 sweep 본 이름(캐릭터 스켈레톤). 맨손 Main 콜리전 매핑. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Combat|Fists")
+	FName RightHandBone = TEXT("hand_r");
+
+	/** 왼손 sweep 본 이름(캐릭터 스켈레톤). 맨손 Second 콜리전 매핑. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Combat|Fists")
+	FName LeftHandBone = TEXT("hand_l");
+
+	// ── 히트 콜리전 컴포넌트 (생성자에서 CreateDefaultSubobject) ──────────
+
+	/**
+	 * 주(Main) 히트 콜리전. 무기 전투=주무기, 맨손=오른손. 캐릭터가 소유·일원화.
+	 * 슬롯 선택자 Main에 대응한다.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat|Collision")
+	TObjectPtr<UBWWeaponCollisionComponent> MainCollision;
+
+	/**
+	 * 보조(Second) 히트 콜리전. 맨손=왼손. 양손/편손 무기는 미사용(ClearSource 상태).
+	 * 슬롯 선택자 Second에 대응한다.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat|Collision")
+	TObjectPtr<UBWWeaponCollisionComponent> SecondCollision;
+
+	// ── 전투 상태 SSOT ───────────────────────────────────────────────────
+
+	/**
+	 * 현재 전투 형태. 무기 장착/맨손 전환 시 RefreshCombatState가 갱신한다.
+	 * AnimInstance가 로코모션 분기를 위해 pull한다.
+	 */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Combat|State")
+	EBWCombatType CurrentCombatType = EBWCombatType::MeleeFists;
+
 	// ── 런타임 상태 (듀얼 슬롯) ────────────────────────────────────
 
 	/** 현재 보유 중인 무기 인스턴스. GC 추적을 위해 TObjectPtr + UPROPERTY. */
@@ -191,10 +265,10 @@ private:
 	 */
 	bool ValidateSocket(const FName& SocketName) const;
 
-	/** 슬롯에 해당하는 손 소켓명을 반환한다. */
+	/** 슬롯에 해당하는 손 소켓명을 반환한다. 양손 무기 오버라이드를 우선 적용한다. */
 	FName GetHandSocketForSlot(EBWEquipSlot Slot) const;
 
-	/** 슬롯에 해당하는 등 소켓명을 반환한다. */
+	/** 슬롯에 해당하는 등 소켓명을 반환한다. 양손 무기 오버라이드를 우선 적용한다. */
 	FName GetBackSocketForSlot(EBWEquipSlot Slot) const;
 
 	/**
@@ -225,13 +299,25 @@ private:
 	 */
 	void PlayEquipMontage(EBWEquipSlot Slot, bool bDraw);
 
-	/** 슬롯·방향에 맞는 몽타주 에셋을 반환한다. 없으면 nullptr. */
+	/**
+	 * 슬롯·방향에 맞는 몽타주 에셋을 반환한다.
+	 * Weapon 슬롯: 무기 DataTable의 Equip/Unequip 행 Steps[0].Montage를 조회한다.
+	 * Shield 슬롯: EquipShieldMontage/UnequipShieldMontage를 반환한다.
+	 * 없으면 nullptr.
+	 */
 	UAnimMontage* GetEquipMontage(EBWEquipSlot Slot, bool bDraw) const;
 
-	/** 슬롯 장비를 손 소켓으로 부착하고 bSlotDrawn=true로 갱신한다. */
+	/**
+	 * 무기 DataTable에서 장착/해제 몽타주를 조회하는 헬퍼.
+	 * bDraw=true → Equip 행, false → Unequip 행의 Steps[0].Montage.
+	 * 무기 없음/DataTable 없음/행 없음/Steps 비어 있음 → nullptr(폴백 즉시 부착).
+	 */
+	UAnimMontage* GetWeaponEquipMontageFromDataTable(bool bDraw) const;
+
+	/** 슬롯 장비를 손 소켓으로 부착하고 bSlotDrawn=true로 갱신한다. Weapon 슬롯 완료 후 RefreshCombatState 호출. */
 	void AttachSlotToHand(EBWEquipSlot Slot);
 
-	/** 슬롯 장비를 등 소켓으로 부착하고 bSlotDrawn=false로 갱신한다. */
+	/** 슬롯 장비를 등 소켓으로 부착하고 bSlotDrawn=false로 갱신한다. Weapon 슬롯 완료 후 RefreshCombatState 호출. */
 	void AttachSlotToBack(EBWEquipSlot Slot);
 
 	/**
@@ -242,6 +328,29 @@ private:
 
 	/** 현재 장착/해제 모션이 진행 중인지 확인한다. 재입력 중복 차단에 사용. */
 	bool IsEquipActionInProgress() const;
+
+	/**
+	 * 현재 무기/맨손 상태에 맞춰 전투 상태를 재구성하는 단일 진입점.
+	 * - 무기가 손에 있음(bWeaponDrawn): CurrentCombatType=무기 타입, Main 콜리전=무기 sweep,
+	 *   Second 콜리전=ClearSource, AttackComponent=무기 DataTable push.
+	 *   TwoHanded이면 방패가 손에 있을 경우 즉시 등으로 강제 보관(스냅).
+	 * - 무기가 없거나 등에 보관 중: CurrentCombatType=MeleeFists,
+	 *   Main=오른손 sweep, Second=왼손 sweep, AttackComponent=FistAttackDataTable push.
+	 * AttachSlotToHand/Back(Weapon) 완료 시점과 BeginPlay 초기화 시점에 호출한다.
+	 */
+	void RefreshCombatState();
+
+	// ── 진행 중 Equip 몽타주 캐시 ─────────────────────────────────────
+
+	/**
+	 * 현재 재생 중인 장착/해제 몽타주. PlayEquipMontage에서 캐시, 종료 콜백에서 클리어.
+	 * EndPlay에서 댕글링 End 델리게이트 정리에 사용한다(BWAttackComponent::EndPlay 패턴 동일).
+	 * GC 추적이 필요하므로 UPROPERTY + TObjectPtr.
+	 */
+	UPROPERTY()
+	TObjectPtr<UAnimMontage> ActiveEquipMontage;
+
+	// ── 캐시 (TWeakObjectPtr, BeginPlay 1회 취득) ─────────────────────
 
 	/**
 	 * 소유 캐릭터의 UBWStateComponent. BeginPlay에서 1회 캐시.
@@ -257,4 +366,10 @@ private:
 	 * 약참조이므로 사용 전 IsValid 확인 필수.
 	 */
 	TWeakObjectPtr<ACharacter> CachedOwnerCharacter;
+
+	/**
+	 * 소유 캐릭터의 UBWAttackComponent. RefreshCombatState에서 DataTable push에 사용.
+	 * BeginPlay에서 1회 캐시. 약참조이므로 사용 전 IsValid 확인 필수.
+	 */
+	TWeakObjectPtr<UBWAttackComponent> CachedAttackComponent;
 };

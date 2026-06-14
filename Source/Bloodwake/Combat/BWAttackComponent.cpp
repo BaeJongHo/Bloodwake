@@ -57,6 +57,19 @@ void UBWAttackComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Super::EndPlay(EndPlayReason);
 }
 
+// ── 활성 DataTable 외부 주입 ──────────────────────────────────────────────────
+
+void UBWAttackComponent::SetActiveAttackDataTable(UDataTable* InTable)
+{
+	AttackDataTable = InTable;
+
+	if (!InTable)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[BWAttackComponent] SetActiveAttackDataTable: null DataTable이 주입되었습니다. 공격이 발동되지 않습니다."));
+	}
+}
+
 // ── 입력 진입점 ───────────────────────────────────────────────────────────────
 
 void UBWAttackComponent::RequestAttack(EBWAttackInputKind InputKind)
@@ -359,7 +372,7 @@ const FBWAttackComboRow* UBWAttackComponent::FindRow(EBWAttackType Type) const
 {
 	if (!AttackDataTable)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[BWAttackComponent] FindRow: AttackDataTable이 설정되지 않았습니다. BP 자식에서 DT_PlayerAttacks를 지정하세요."));
+		UE_LOG(LogTemp, Warning, TEXT("[BWAttackComponent] FindRow: AttackDataTable이 설정되지 않았습니다. UBWCombatComponent::RefreshCombatState가 SetActiveAttackDataTable을 호출했는지 확인하세요."));
 		return nullptr;
 	}
 
