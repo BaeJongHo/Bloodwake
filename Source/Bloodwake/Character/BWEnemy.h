@@ -15,6 +15,7 @@ class UBWLockOnWidgetComponent;
 class UAnimMontage;
 class UParticleSystem;
 class USoundBase;
+class ATargetPoint;
 
 /**
  * 피격을 받는 적 캐릭터 베이스 클래스.
@@ -31,6 +32,12 @@ class BLOODWAKE_API ABWEnemy : public ACharacter, public IBWTargetingInterface
 
 public:
 	ABWEnemy();
+
+	/**
+	 * 순찰 지점 배열 접근자. Patrol BT Task가 읽는다.
+	 * const 참조 반환으로 복사 비용 없이 배열을 노출한다.
+	 */
+	const TArray<TObjectPtr<ATargetPoint>>& GetPatrolPoints() const { return PatrolPoints; }
 
 	/**
 	 * 데미지 수신 오버라이드.
@@ -63,6 +70,17 @@ public:
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+	// ── AI 순찰 데이터 ──────────────────────────────────────────────────────
+
+	/**
+	 * 이 적이 순환 순찰할 지점들. 레벨에 배치한 ATargetPoint 액터를
+	 * 디테일 패널에서 인스턴스별로 지정한다.
+	 * 비어 있으면 Patrol Task는 즉시 Failed 반환(제자리 대기).
+	 * EditInstanceOnly: 순찰 경로는 레벨 배치 인스턴스마다 다르다.
+	 */
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Enemy|AI")
+	TArray<TObjectPtr<ATargetPoint>> PatrolPoints;
 
 	/** OnDeath 델리게이트 구독 콜백. UFUNCTION 필수(AddDynamic 요구). */
 	UFUNCTION()
