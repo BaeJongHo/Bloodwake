@@ -7,15 +7,18 @@
 #include "Combat/BWCombatTypes.h"
 #include "BWPlayerAnimInstance.generated.h"
 
+class ACharacter;
 class ABWPlayerCharacter;
 class UCharacterMovementComponent;
 class UBWCombatComponent;
 
 /**
- * ABWPlayerCharacter 전용 애님 인스턴스.
+ * 플레이어·적 공용 애님 인스턴스.
+ * 클래스명은 이전 호환성을 위해 "Player"를 유지하되, NativeInitializeAnimation에서
+ * ACharacter 공통 API로 캐싱해 Enemy에서도 로코모션이 정상 동작한다(결정사항 7).
+ * 플레이어 전용 기능(EndRoll)은 CachedPlayerCharacter 약참조를 통해 처리한다.
  * 캐릭터/이동 컴포넌트를 한 번 캐시해 두고, 워커 스레드 업데이트에서
  * 로코모션 블렌드용 값(지면 속도·이동 방향·낙하/이동 여부)을 갱신한다.
- * 락온 스트레이프·콤보·회피 등 전투 상태는 후속 작업에서 확장한다.
  */
 UCLASS()
 class BLOODWAKE_API UBWPlayerAnimInstance : public UAnimInstance
@@ -37,16 +40,20 @@ public:
 	/**
 	 * 회피(Roll) 몽타주에 배치한 커스텀(이름 기반) AnimNotify "RollEnd"가 호출하는 함수.
 	 * 엔진은 이름 기반 노티파이를 소유 AnimInstance의 AnimNotify_<NotifyName> 함수로 디스패치한다.
-	 * 따라서 몽타주에 "RollEnd" 노티파이를 배치하면 이 함수가 호출되며(에디터에서 배치),
-	 * 소유 캐릭터의 EndRoll을 호출해 Roll 상태를 해제(→ Normal)한다.
+	 * 플레이어 캐릭터(CachedPlayerCharacter)에 한해 EndRoll을 호출한다.
+	 * Enemy에서 사용하면 null이므로 무동작(안전).
 	 */
 	UFUNCTION()
 	void AnimNotify_RollEnd();
 
 protected:
-	/** 소유 플레이어 캐릭터. NativeInitializeAnimation에서 한 번 캐시한다. */
+	/**
+	 * 소유 ACharacter. NativeInitializeAnimation에서 한 번 캐시한다.
+	 * 플레이어/적 양쪽에서 동작하도록 ACharacter로 일반화(결정사항 7).
+	 * 로코모션 방향 계산(GetActorRotation)에 사용한다.
+	 */
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Character", meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<ABWPlayerCharacter> OwningCharacter;
+	TObjectPtr<ACharacter> OwningCharacter;
 
 	/** 소유 캐릭터의 이동 컴포넌트. 속도/낙하 상태 조회용으로 캐시한다. */
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Character", meta = (AllowPrivateAccess = "true"))
@@ -60,7 +67,7 @@ protected:
 	UPROPERTY(BlueprintReadOnly, Category = "Locomotion", meta = (AllowPrivateAccess = "true"))
 	float Direction = 0.0f;
 
-	/** 이동 입력이 있고 속도가 충분해 이동 애니메이션을 재생해야 하는지 여부. */
+	/** 이동 속도가 MovingSpeedThreshold를 초과할 때 이동 애니메이션을 재생해야 하는지 여부. 속도 단독 판정(AI 폰 호환). */
 	UPROPERTY(BlueprintReadOnly, Category = "Locomotion", meta = (AllowPrivateAccess = "true"))
 	bool bShouldMove = false;
 
@@ -86,7 +93,8 @@ protected:
 
 	/**
 	 * 현재 락온 중인지 여부. ABP에서 스트레이프 블렌드스페이스 전환 조건으로 사용한다.
-	 * NativeThreadSafeUpdateAnimation에서 OwningCharacter->IsLockedOn()(캐시 bool)을 pull한다.
+	 * NativeThreadSafeUpdateAnimation에서 CachedPlayerCharacter->IsLockedOn()(캐시 bool)을 pull한다.
+	 * Enemy에서는 항상 false(락온 중이 아님)로 유지한다.
 	 * Thread-safe: 캐시된 bool을 읽어 워커 스레드 안전.
 	 */
 	UPROPERTY(BlueprintReadOnly, Category = "Locomotion", meta = (AllowPrivateAccess = "true"))
@@ -95,7 +103,7 @@ protected:
 	/**
 	 * 손에 무기를 들고 있는지. ABP 무기/맨손 로코모션 분기.
 	 * NativeThreadSafeUpdateAnimation에서 CachedCombatComponent->IsWeaponDrawn()을 pull한다.
-	 * Thread-safe: CombatComponent가 갱신하는 POD bool을 읽는다(bIsLockedOn 선례 준수).
+	 * Thread-safe: CombatComponent가 갱신하는 POD bool을 읽는다.
 	 */
 	UPROPERTY(BlueprintReadOnly, Category = "Combat", meta = (AllowPrivateAccess = "true"))
 	bool bIsWeaponDrawn = false;
@@ -103,7 +111,7 @@ protected:
 	/**
 	 * 현재 전투 형태. ABP 무기 종류별 포즈/블렌드 분기.
 	 * NativeThreadSafeUpdateAnimation에서 CachedCombatComponent->GetCurrentCombatType()을 pull한다.
-	 * Thread-safe: CombatComponent가 갱신하는 POD enum을 읽는다(bIsLockedOn 선례 준수).
+	 * Thread-safe: CombatComponent가 갱신하는 POD enum을 읽는다.
 	 */
 	UPROPERTY(BlueprintReadOnly, Category = "Combat", meta = (AllowPrivateAccess = "true"))
 	EBWCombatType CurrentCombatType = EBWCombatType::MeleeFists;
@@ -112,7 +120,7 @@ protected:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Locomotion|Config", meta = (AllowPrivateAccess = "true", ClampMin = "0.0"))
 	float MovingSpeedThreshold = 3.0f;
 
-	/** 걷기/달리기 구분 기준 속도(cm/s). 이 값 이하면 걷기로 본다. 무기·상태별 보행 속도에 맞춰 조정한다. */
+	/** 걷기/달리기 구분 기준 속도(cm/s). 이 값 이하면 걷기로 본다. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Locomotion|Config", meta = (AllowPrivateAccess = "true", ClampMin = "0.0"))
 	float WalkSpeedThreshold = 165.0f;
 
@@ -124,10 +132,25 @@ private:
 	TWeakObjectPtr<UBWCombatComponent> CachedCombatComponent;
 
 	/**
+	 * 플레이어 캐릭터 전용 캐시. EndRoll 등 플레이어 전용 기능 호출에 사용.
+	 * Enemy에서는 null이므로 IsValid 확인 필수.
+	 * 약참조이므로 사용 전 IsValid 확인 필수.
+	 */
+	TWeakObjectPtr<ABWPlayerCharacter> CachedPlayerCharacter;
+
+	/**
 	 * 게임 스레드(NativeUpdateAnimation)에서 CombatComponent 값을 미리 읽어 두는 캐시.
 	 * NativeThreadSafeUpdateAnimation(워커 스레드)은 이 값만 복사해 스레드 안전을 보장한다.
-	 * bIsLockedOn이 OwningCharacter->IsLockedOn() 캐시 bool을 pull하는 방식과 동일한 패턴.
 	 */
 	bool bCachedWeaponDrawn = false;
 	EBWCombatType CachedCombatType = EBWCombatType::MeleeFists;
+
+	/** 플레이어 IsLockedOn 캐시. NativeUpdateAnimation(게임 스레드)에서 읽어 두는 캐시. */
+	bool bCachedIsLockedOn = false;
+
+	/**
+	 * 액터 회전 캐시. NativeUpdateAnimation(게임 스레드)에서 OwningCharacter->GetActorRotation()을 읽어 저장.
+	 * NativeThreadSafeUpdateAnimation(워커 스레드)은 이 POD 캐시만 사용해 스레드 안전을 보장한다.
+	 */
+	FRotator CachedActorRotation = FRotator::ZeroRotator;
 };

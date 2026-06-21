@@ -5,13 +5,21 @@
 #include "Components/CapsuleComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Animation/AnimInstance.h"
+#include "Animation/AnimMontage.h"
 #include "Engine/DamageEvents.h"
+#include "Engine/DataTable.h"
+#include "Particles/ParticleSystem.h"
 #include "Kismet/GameplayStatics.h"
+#include "Math/UnrealMathUtility.h"
 #include "Combat/BWAttributeComponent.h"
+#include "Combat/BWCombatComponent.h"
+#include "Combat/BWAttackComponent.h"
+#include "Combat/BWAttackTypes.h"
 #include "Combat/BWTargetingCollisionComponent.h"
 #include "Combat/BWLockOnWidgetComponent.h"
 #include "Character/BWStateComponent.h"
 #include "Core/BWGameplayDefine.h"
+#include "Equipment/BWWeapon.h"
 
 ABWEnemy::ABWEnemy()
 {
@@ -23,6 +31,12 @@ ABWEnemy::ABWEnemy()
 
 	// StateComponent — 행동 상태(GameplayTag) 관리
 	StateComponent = CreateDefaultSubobject<UBWStateComponent>(TEXT("StateComponent"));
+
+	// CombatComponent — 장비 보유·장착·해제 로직 (플레이어와 동일 컴포넌트 재사용)
+	CombatComponent = CreateDefaultSubobject<UBWCombatComponent>(TEXT("CombatComponent"));
+
+	// AttackComponent — 공격(콤보) 로직 (플레이어와 동일 컴포넌트 재사용)
+	AttackComponent = CreateDefaultSubobject<UBWAttackComponent>(TEXT("AttackComponent"));
 
 	// TargetingCollision — 락온 스윕이 맞히는 구체 형상. 루트에 부착(메시 기준 높이는 BP에서 조정).
 	TargetingCollision = CreateDefaultSubobject<UBWTargetingCollisionComponent>(TEXT("TargetingCollision"));
@@ -42,6 +56,9 @@ void ABWEnemy::BeginPlay()
 	{
 		AttributeComponent->OnDeath.AddDynamic(this, &ABWEnemy::HandleDeath);
 	}
+
+	// DefaultWeaponClass가 지정된 경우 무기를 스폰해 손에 즉시 장착한다.
+	SpawnAndEquipDefaultWeapon();
 }
 
 void ABWEnemy::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -93,6 +110,122 @@ FVector ABWEnemy::GetTargetFocusLocation() const
 	// 폴백: 액터 위치에서 캡슐 절반 높이만큼 올린 가슴 높이 근사값
 	return GetActorLocation() + FVector(0.f, 0.f, GetCapsuleComponent() ?
 		GetCapsuleComponent()->GetScaledCapsuleHalfHeight() * 0.6f : 80.f);
+}
+
+// ── IBWCombatInterface 구현 ───────────────────────────────────────────────────
+
+void ABWEnemy::PerformAttack(FOnMontageEnded OnEnded)
+{
+	// 1) Dead 가드 — 사망한 적은 공격 불가
+	if (bIsDead)
+	{
+		OnEnded.ExecuteIfBound(nullptr, true);
+		return;
+	}
+
+	// 2) Hit 상태 가드 — 피격 경직 중에는 공격 불가
+	if (IsValid(StateComponent) && StateComponent->HasStateTag(BWGameplayTags::Character_State_Hit.GetTag()))
+	{
+		OnEnded.ExecuteIfBound(nullptr, true);
+		return;
+	}
+
+	// 3) DataTable 유효성 검사
+	if (!EnemyAttackDataTable)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[BWEnemy] PerformAttack: EnemyAttackDataTable이 설정되지 않았습니다. (%s)"), *GetName());
+		OnEnded.ExecuteIfBound(nullptr, true);
+		return;
+	}
+
+	// 4) DataTable에서 모든 행의 모든 Step을 풀로 모아 랜덤 선택
+	//    공격 DataTable의 모든 행(Light/Running/Special/Heavy)에서 Step을 수집한다.
+	//    Equip/Unequip 행은 스태미나 소모 없이 재생하면 안 되므로 제외한다.
+	TArray<FBWComboStep> AllSteps;
+
+	const TArray<FName>& RowNames = EnemyAttackDataTable->GetRowNames();
+	for (const FName& RowName : RowNames)
+	{
+		// Equip/Unequip 행 제외
+		if (RowName == TEXT("Equip") || RowName == TEXT("Unequip"))
+		{
+			continue;
+		}
+
+		const FBWAttackComboRow* Row = EnemyAttackDataTable->FindRow<FBWAttackComboRow>(RowName, TEXT("BWEnemy::PerformAttack"));
+		if (Row)
+		{
+			for (const FBWComboStep& Step : Row->Steps)
+			{
+				if (Step.Montage)
+				{
+					AllSteps.Add(Step);
+				}
+			}
+		}
+	}
+
+	if (AllSteps.Num() == 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[BWEnemy] PerformAttack: EnemyAttackDataTable에 재생 가능한 몽타주 Step이 없습니다. (%s)"), *GetName());
+		OnEnded.ExecuteIfBound(nullptr, true);
+		return;
+	}
+
+	// 랜덤 Step 선택
+	const int32 RandIndex = FMath::RandRange(0, AllSteps.Num() - 1);
+	const FBWComboStep& SelectedStep = AllSteps[RandIndex];
+
+	// 5) 스태미나 체크 — 부족하면 OnEnded 즉시 호출로 BT Latent 교착 방지
+	if (IsValid(AttributeComponent) && !AttributeComponent->HasEnoughStamina(SelectedStep.StaminaCost))
+	{
+		UE_LOG(LogTemp, Log, TEXT("[BWEnemy] PerformAttack: 스태미나 부족으로 공격 취소. (%s)"), *GetName());
+		OnEnded.ExecuteIfBound(nullptr, true);
+		return;
+	}
+
+	// 6) AnimInstance 획득
+	UAnimInstance* AnimInstance = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr;
+	if (!AnimInstance)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[BWEnemy] PerformAttack: AnimInstance를 찾을 수 없습니다. (%s)"), *GetName());
+		OnEnded.ExecuteIfBound(nullptr, true);
+		return;
+	}
+
+	// 7) 공격 상태 태그 부착 (Character_Attack_Light 재사용 — 적 단순 공격 표시용)
+	if (IsValid(StateComponent))
+	{
+		StateComponent->AddStateTag(BWGameplayTags::Character_Attack_Light.GetTag());
+	}
+
+	// 8) 몽타주 재생
+	UAnimMontage* Montage = SelectedStep.Montage.Get();
+	const float MontageLength = AnimInstance->Montage_Play(Montage);
+
+	if (MontageLength <= 0.f)
+	{
+		// 재생 실패 — 태그 즉시 해제하고 BT Latent 종료
+		UE_LOG(LogTemp, Warning, TEXT("[BWEnemy] PerformAttack: Montage_Play 실패. (%s)"), *GetName());
+		if (IsValid(StateComponent))
+		{
+			StateComponent->RemoveStateTag(BWGameplayTags::Character_Attack_Light.GetTag());
+		}
+		OnEnded.ExecuteIfBound(Montage, true);
+		return;
+	}
+
+	// 9) 스태미나 소비 — 몽타주 재생 성공 확인 후에 소비(재생 실패 시 누수 방지, BWAttackComponent 패턴 동일)
+	if (IsValid(AttributeComponent))
+	{
+		AttributeComponent->ConsumeStamina(SelectedStep.StaminaCost);
+	}
+
+	// 10) ActiveAttackMontage 캐시 (AbortTask에서 정지에 사용)
+	ActiveAttackMontage = Montage;
+
+	// 11) 종료 델리게이트 바인딩 — BT가 넘긴 콜백을 그대로 AnimInstance에 전달
+	AnimInstance->Montage_SetEndDelegate(OnEnded, Montage);
 }
 
 // ── TakeDamage 오버라이드 ─────────────────────────────────────────────────────
@@ -151,6 +284,56 @@ void ABWEnemy::HandleDeath()
 }
 
 // ── private 구현부 ────────────────────────────────────────────────────────────
+
+void ABWEnemy::AbortCurrentAttack()
+{
+	// 진행 중 공격 몽타주 정지
+	if (IsValid(ActiveAttackMontage))
+	{
+		UAnimInstance* AnimInstance = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr;
+		if (AnimInstance)
+		{
+			AnimInstance->Montage_Stop(0.1f, ActiveAttackMontage.Get());
+		}
+		ActiveAttackMontage = nullptr;
+	}
+
+	// 공격 상태 태그 초기화
+	if (IsValid(StateComponent))
+	{
+		StateComponent->RemoveStateTag(BWGameplayTags::Character_Attack_Light.GetTag());
+	}
+}
+
+void ABWEnemy::SpawnAndEquipDefaultWeapon()
+{
+	if (!DefaultWeaponClass)
+	{
+		// DefaultWeaponClass 미설정 — 맨손으로 시작. CombatComponent의 RefreshCombatState가 FistAttackDataTable을 설정한다.
+		return;
+	}
+
+	if (!IsValid(CombatComponent))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[BWEnemy] SpawnAndEquipDefaultWeapon: CombatComponent가 유효하지 않습니다. (%s)"), *GetName());
+		return;
+	}
+
+	// CombatComponent를 통해 무기를 장착한다.
+	// EquipNewItem은 무기를 등(Back)에 부착하고 RefreshCombatState를 호출해 AttackDataTable/콜리전을 자동 배선한다.
+	// 이후 AttachSlotToSocket(Weapon, Hand)로 손 소켓으로 즉시 이동시킨다.
+	const bool bSuccess = CombatComponent->EquipNewItem(DefaultWeaponClass, FTransform::Identity);
+	if (!bSuccess)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[BWEnemy] SpawnAndEquipDefaultWeapon: EquipNewItem 실패. (%s)"), *GetName());
+		return;
+	}
+
+	// 적은 항상 무기를 손에 들고 시작한다 — 등→손 즉시 이동 (몽타주 없이 스냅).
+	CombatComponent->AttachSlotToSocket(EBWEquipSlot::Weapon, EBWAttachDestination::Hand);
+
+	UE_LOG(LogTemp, Log, TEXT("[BWEnemy] SpawnAndEquipDefaultWeapon: 무기를 손에 장착 완료. (%s)"), *GetName());
+}
 
 EBWHitDirection ABWEnemy::ComputeHitDirection(const FVector& ShotDirection) const
 {

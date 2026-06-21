@@ -152,11 +152,17 @@ void ABWEnemyAIController::UpdateTarget()
 	AIPerception->GetKnownPerceivedActors(UAISense_Sight::StaticClass(), PerceivedActors);
 
 	// 인지된 액터 중 첫 번째 ABWPlayerCharacter를 추격 대상으로 삼는다.
+	// 단, 사망한 플레이어는 추격/공격 대상에서 제외한다(아래 Target 미설정 → 순찰 복귀).
 	ABWPlayerCharacter* FoundPlayer = nullptr;
 	for (AActor* Actor : PerceivedActors)
 	{
 		if (ABWPlayerCharacter* Player = Cast<ABWPlayerCharacter>(Actor))
 		{
+			if (Player->IsDead())
+			{
+				continue;
+			}
+
 			FoundPlayer = Player;
 			break;
 		}

@@ -3,10 +3,15 @@
 #include "Character/BWPlayerCharacter.h"
 
 #include "Camera/CameraComponent.h"
+#include "Components/CapsuleComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
-#include "Components/SkeletalMeshComponent.h"
 #include "Animation/AnimInstance.h"
+#include "Animation/AnimMontage.h"
+#include "Engine/DamageEvents.h"
+#include "Particles/ParticleSystem.h"
+#include "Kismet/GameplayStatics.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
@@ -14,6 +19,7 @@
 #include "Combat/BWCombatComponent.h"
 #include "Combat/BWAttackComponent.h"
 #include "Combat/BWTargetingComponent.h"
+#include "Combat/BWAttackTypes.h"
 #include "Character/BWStateComponent.h"
 #include "Core/BWGameplayDefine.h"
 #include "Equipment/BWPickUpItem.h"
@@ -75,6 +81,7 @@ void ABWPlayerCharacter::BeginPlay()
 	{
 		AttributeComponent->OnStaminaDepleted.AddDynamic(this, &ABWPlayerCharacter::HandleStaminaDepleted);
 		AttributeComponent->OnStaminaChanged.AddDynamic(this, &ABWPlayerCharacter::HandleStaminaChanged);
+		AttributeComponent->OnDeath.AddDynamic(this, &ABWPlayerCharacter::HandleDeath);
 	}
 }
 
@@ -86,11 +93,12 @@ void ABWPlayerCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		World->GetTimerManager().ClearTimer(SprintDrainTimerHandle);
 	}
 
-	// 델리게이트 구독 해제
+	// 델리게이트 구독 해제 (댕글링 콜백 방지 — 규약 4.3)
 	if (IsValid(AttributeComponent))
 	{
 		AttributeComponent->OnStaminaDepleted.RemoveDynamic(this, &ABWPlayerCharacter::HandleStaminaDepleted);
 		AttributeComponent->OnStaminaChanged.RemoveDynamic(this, &ABWPlayerCharacter::HandleStaminaChanged);
+		AttributeComponent->OnDeath.RemoveDynamic(this, &ABWPlayerCharacter::HandleDeath);
 	}
 
 	Super::EndPlay(EndPlayReason);
@@ -137,10 +145,6 @@ void ABWPlayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputC
 
 		if (SprintAction)
 		{
-			// Hold 전용 IA: Hold 임계 시간 충족 시 Triggered(1회) → 질주 시작.
-			// 기존 Started(누르자마자) 시작에서 Triggered(Hold 충족) 시작으로 변경됨.
-			// 주의: RollAction(Tap IA)과 같은 물리 키에 매핑 시 Tap은 RollAction이 담당,
-			//       Hold 충족 전 Tap으로 처리되면 SprintRollingAction의 Triggered는 발생하지 않는다.
 			EnhancedInput->BindAction(SprintAction, ETriggerEvent::Triggered,  this, &ABWPlayerCharacter::StartSprint);
 			EnhancedInput->BindAction(SprintAction, ETriggerEvent::Completed,  this, &ABWPlayerCharacter::StopSprint);
 			EnhancedInput->BindAction(SprintAction, ETriggerEvent::Canceled,   this, &ABWPlayerCharacter::StopSprint);
@@ -148,60 +152,181 @@ void ABWPlayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputC
 
 		if (RollAction)
 		{
-			// Tap 전용 IA: 짧은 탭 충족 시 Triggered(1회) → 구르기 상태 진입.
 			EnhancedInput->BindAction(RollAction, ETriggerEvent::Triggered, this, &ABWPlayerCharacter::Roll);
 		}
 
 		if (InteractAction)
 		{
-			// 누르는 순간 1회(Started) → 구체 스윕으로 픽업 감지 후 장착 위임.
 			EnhancedInput->BindAction(InteractAction, ETriggerEvent::Started, this, &ABWPlayerCharacter::Interact);
 		}
 
 		if (ToggleWeaponAction)
 		{
-			// 누르는 순간 1회(Started) → 무기 손↔등 토글.
 			EnhancedInput->BindAction(ToggleWeaponAction, ETriggerEvent::Started, this, &ABWPlayerCharacter::ToggleWeapon);
 		}
 
 		if (ToggleShieldAction)
 		{
-			// 누르는 순간 1회(Started) → 방패 손↔등 토글.
 			EnhancedInput->BindAction(ToggleShieldAction, ETriggerEvent::Started, this, &ABWPlayerCharacter::ToggleShield);
 		}
 
 		if (AttackAction)
 		{
 			// IA_Attack: Started(누르는 순간) → PrimaryTap(Light/Running 분기), Triggered(Hold 충족) → PrimaryHold(Special).
-			EnhancedInput->BindAction(AttackAction, ETriggerEvent::Canceled, this, &ABWPlayerCharacter::OnAttackStarted);
+			EnhancedInput->BindAction(AttackAction, ETriggerEvent::Started, this, &ABWPlayerCharacter::OnAttackStarted);
 			EnhancedInput->BindAction(AttackAction, ETriggerEvent::Triggered, this, &ABWPlayerCharacter::OnAttackHold);
 		}
 
 		if (HeavyAttackAction)
 		{
-			// IA_HeavyAttack: Started(누르는 순간) → Heavy.
 			EnhancedInput->BindAction(HeavyAttackAction, ETriggerEvent::Started, this, &ABWPlayerCharacter::OnHeavyAttack);
 		}
 
 		if (LockOnAction)
 		{
-			// IA_LockOn: Started(누르는 순간) → 락온 토글.
 			EnhancedInput->BindAction(LockOnAction, ETriggerEvent::Started, this, &ABWPlayerCharacter::OnLockOn);
 		}
 
 		if (SwitchTargetAction)
 		{
-			// IA_SwitchTarget: Started(입력이 문턱을 넘는 순간 1회) → 타깃 전환. 락온 중에만 유효.
-			// Triggered가 아닌 Started를 쓰는 이유: 마우스 플릭/스틱/키 홀드 모두 "한 제스처 = 한 칸 전환"으로 만들기 위함.
 			EnhancedInput->BindAction(SwitchTargetAction, ETriggerEvent::Started, this, &ABWPlayerCharacter::OnSwitchTarget);
 		}
 	}
 }
 
+// ── IBWCombatInterface 구현 ───────────────────────────────────────────────────
+
+void ABWPlayerCharacter::PerformAttack(FOnMontageEnded OnEnded)
+{
+	// 플레이어는 BT가 직접 호출하지 않는다 — 인터페이스 계약 충족용 얇은 구현.
+	// AttackComponent->RequestAttack(PrimaryTap)에 위임한다. OnEnded는 미사용.
+	if (IsValid(AttackComponent))
+	{
+		AttackComponent->RequestAttack(EBWAttackInputKind::PrimaryTap);
+	}
+}
+
+// ── TakeDamage 오버라이드 ─────────────────────────────────────────────────────
+
+float ABWPlayerCharacter::TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent,
+	AController* EventInstigator, AActor* DamageCauser)
+{
+	// 이미 사망한 플레이어는 추가 타격을 무시한다.
+	if (bIsDead)
+	{
+		return 0.f;
+	}
+
+	// 엔진 표준 처리를 통해 실제 데미지 수치를 획득한다.
+	const float ActualDamage = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
+
+	// FPointDamageEvent에서 ImpactPoint/ShotDirection 추출
+	FVector ImpactPoint = GetActorLocation();
+	FVector ShotDirection = GetActorForwardVector(); // 폴백: 정면에서 맞은 것으로 처리
+
+	if (DamageEvent.IsOfType(FPointDamageEvent::ClassID))
+	{
+		const FPointDamageEvent& PointEvent = static_cast<const FPointDamageEvent&>(DamageEvent);
+		ImpactPoint = PointEvent.HitInfo.ImpactPoint;
+
+		if (!PointEvent.ShotDirection.IsNearlyZero())
+		{
+			ShotDirection = PointEvent.ShotDirection;
+		}
+	}
+
+	// 데미지를 AttributeComponent에 위임 (체력 0 도달 시 OnDeath 델리게이트 브로드캐스트 → HandleDeath)
+	if (AttributeComponent)
+	{
+		AttributeComponent->ApplyDamage(ActualDamage);
+	}
+
+	// 피격 이펙트·리액션 재생 (사망은 OnDeath 델리게이트가 별도 트리거)
+	PlayHitEffects(ImpactPoint);
+	PlayHitReaction(ShotDirection);
+
+	return ActualDamage;
+}
+
+// ── 사망 처리 ────────────────────────────────────────────────────────────────
+
+void ABWPlayerCharacter::HandleDeath()
+{
+	// bIsDead 가드 — HandleDeath 재진입 방지
+	if (bIsDead)
+	{
+		return;
+	}
+
+	EnableDeathState();
+}
+
+void ABWPlayerCharacter::EnableDeathState()
+{
+	// 1) 사망 플래그 설정
+	bIsDead = true;
+
+	// 2) 행동 상태 태그 모두 해제 후 Death 태그 부착
+	if (IsValid(StateComponent))
+	{
+		StateComponent->ClearAllStateTags();
+		StateComponent->AddStateTag(BWGameplayTags::Character_State_Death.GetTag());
+	}
+
+	// 3) 진행 중인 몽타주 정지
+	UAnimInstance* AnimInstance = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr;
+	if (AnimInstance)
+	{
+		AnimInstance->Montage_Stop(0.1f);
+	}
+
+	// 4) 입력 차단 — 플레이어 컨트롤러에서 입력을 비활성화한다.
+	if (APlayerController* PC = Cast<APlayerController>(GetController()))
+	{
+		PC->SetIgnoreMoveInput(true);
+		PC->SetIgnoreLookInput(true);
+		DisableInput(PC);
+	}
+
+	// 5) 이동 중단
+	if (UCharacterMovementComponent* MoveComp = GetCharacterMovement())
+	{
+		MoveComp->StopMovementImmediately();
+	}
+
+	// 6) 사망 연출: DeathMontage 재생 (없으면 랙돌 폴백)
+	if (DeathMontage && AnimInstance)
+	{
+		AnimInstance->Montage_Play(DeathMontage);
+	}
+	else
+	{
+		// 랙돌 폴백 — DeathMontage가 지정되지 않은 경우
+		if (UCapsuleComponent* Capsule = GetCapsuleComponent())
+		{
+			Capsule->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		}
+
+		if (UCharacterMovementComponent* MoveComp = GetCharacterMovement())
+		{
+			MoveComp->DisableMovement();
+		}
+
+		if (USkeletalMeshComponent* PlayerMesh = GetMesh())
+		{
+			PlayerMesh->SetCollisionProfileName(TEXT("Ragdoll"));
+			PlayerMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+			PlayerMesh->SetSimulatePhysics(true);
+		}
+	}
+}
+
+// ── 입력 콜백 ────────────────────────────────────────────────────────────────
+
 void ABWPlayerCharacter::Move(const FInputActionValue& Value)
 {
-	// 구르기 또는 공격 중에는 이동 입력을 무시한다.
-	if (IsRolling() || IsAttacking())
+	// 구르기, 공격, 피격, 사망 중에는 이동 입력을 무시한다.
+	if (IsRolling() || IsAttacking() || IsHit() || bIsDead)
 	{
 		return;
 	}
@@ -239,8 +364,8 @@ void ABWPlayerCharacter::Look(const FInputActionValue& Value)
 
 void ABWPlayerCharacter::StartJump()
 {
-	// 구르기 또는 공격 중에는 점프를 차단한다.
-	if (IsRolling() || IsAttacking())
+	// 구르기, 공격, 피격, 사망 중에는 점프를 차단한다.
+	if (IsRolling() || IsAttacking() || IsHit() || bIsDead)
 	{
 		return;
 	}
@@ -251,6 +376,11 @@ void ABWPlayerCharacter::StartJump()
 bool ABWPlayerCharacter::IsRolling() const
 {
 	return IsValid(StateComponent) && StateComponent->HasStateTag(BWGameplayTags::Character_State_Roll.GetTag());
+}
+
+bool ABWPlayerCharacter::IsHit() const
+{
+	return IsValid(StateComponent) && StateComponent->HasStateTag(BWGameplayTags::Character_State_Hit.GetTag());
 }
 
 // ── Sprint 입력 콜백 ─────────────────────────────────────────────────────────
@@ -379,8 +509,8 @@ void ABWPlayerCharacter::Roll(const FInputActionValue& Value)
 		return;
 	}
 
-	// 이미 구르는 중이거나 공격 중이면 중복 입력 무시.
-	if (IsRolling() || IsAttacking())
+	// 피격, 사망, 이미 구르는 중, 공격 중에는 중복 입력 무시.
+	if (IsHit() || bIsDead || IsRolling() || IsAttacking())
 	{
 		return;
 	}
@@ -407,22 +537,16 @@ void ABWPlayerCharacter::Roll(const FInputActionValue& Value)
 		return;
 	}
 
-	// TODO(후속): i-frame 활성화.
-
 	// 구르기 상태 진입(Normal 자동 해제). 이 동안 Move/Jump가 차단된다.
 	StateComponent->AddStateTag(BWGameplayTags::Character_State_Roll.GetTag());
 
-	// 스태미나 소비. ConsumeStamina가 소비 시점(LastConsumeTime)을 기록하고 regen 타이머를 재가동하므로,
-	// AttributeComponent의 RegenDelay(1초) 경과 후 스태미나가 자동으로 다시 회복된다.
+	// 스태미나 소비.
 	if (IsValid(AttributeComponent))
 	{
 		AttributeComponent->ConsumeStamina(RollStaminaCost);
 	}
 
 	// 회피 몽타주 재생.
-	// 1) 정상 흐름: 몽타주에 배치한 커스텀 AnimNotify("RollEnd")가 회복 시점에 EndRoll을 호출(이른 입력 허용).
-	// 2) 안전망: 몽타주 종료 델리게이트를 바인딩해, 공격 등 다른 몽타주가 구르기를 끊어
-	//    RollEnd 노티파이가 불리지 못한 경우(bInterrupted=true)에도 EndRoll을 보장 호출한다.
 	UAnimInstance* AnimInstance = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr;
 	const float MontageLength = AnimInstance ? AnimInstance->Montage_Play(RollMontage) : 0.f;
 	if (MontageLength > 0.f)
@@ -441,7 +565,6 @@ void ABWPlayerCharacter::Roll(const FInputActionValue& Value)
 void ABWPlayerCharacter::OnRollMontageEnded(UAnimMontage* Montage, bool bInterrupted)
 {
 	// 정상 종료(노티파이가 이미 EndRoll 했을 수 있음)든 중단이든 Roll 상태를 확실히 해제한다.
-	// EndRoll은 태그가 이미 없으면 무시되므로 중복 호출이 안전하다.
 	EndRoll();
 }
 
@@ -466,7 +589,6 @@ void ABWPlayerCharacter::OnLockOn(const FInputActionValue& /*Value*/)
 		return;
 	}
 
-	// TargetingComponent 내부의 StartLockOn/EndLockOn에서 SetIsLockedOnCached를 호출해 동기화된다.
 	TargetingComponent->ToggleLockOn();
 }
 
@@ -482,7 +604,6 @@ void ABWPlayerCharacter::OnSwitchTarget(const FInputActionValue& Value)
 		return;
 	}
 
-	// Axis1D 값 추출 (좌: 음수, 우: 양수)
 	const float AxisX = Value.Get<float>();
 	TargetingComponent->SwitchTargetWithDirection(AxisX);
 }
@@ -494,8 +615,6 @@ bool ABWPlayerCharacter::CanSprint() const
 		return false;
 	}
 
-	// 최소 한 틱분 스태미나를 보유해야 질주 진입 가능.
-	// 이보다 적으면 BeginSprinting 직후 첫 TickSprintDrain에서 실패해 즉시 종료되는 진입/종료 반복이 발생한다.
 	const float MinRequired = SprintStaminaCostPerSecond * SprintStaminaDrainInterval;
 	return AttributeComponent->HasEnoughStamina(MinRequired);
 }
@@ -557,12 +676,8 @@ void ABWPlayerCharacter::Interact(const FInputActionValue& /*Value*/)
 		return;
 	}
 
-	// 픽업 Transform 캡처 — EquipNewItem 내부 교체 드롭 시 이 위치에 기존 장비를 드롭한다.
-	// 1회 트레이스 후 동기 처리이므로, 드롭으로 생성된 새 픽업은 이 호출 내에서 재감지되지 않는다(무한 루프 방지).
 	const FTransform BestTransform = Best->GetActorTransform();
 
-	// 장착을 CombatComponent에 위임하고, 성공 시에만 원본 픽업을 소비한다.
-	// EquipNewItem 내부에서 교체 드롭(DropEquipItem)이 완료된 후 반환되므로 순서 보장됨.
 	if (CombatComponent->EquipNewItem(Best->GetEquipItemClass(), BestTransform))
 	{
 		if (IsValid(Best))
@@ -606,6 +721,12 @@ bool ABWPlayerCharacter::IsAttacking() const
 
 void ABWPlayerCharacter::OnAttackStarted(const FInputActionValue& /*Value*/)
 {
+	// 피격 또는 사망 중에는 공격 입력 차단
+	if (IsHit() || bIsDead)
+	{
+		return;
+	}
+
 	if (!IsValid(AttackComponent))
 	{
 		return;
@@ -616,6 +737,12 @@ void ABWPlayerCharacter::OnAttackStarted(const FInputActionValue& /*Value*/)
 
 void ABWPlayerCharacter::OnAttackHold(const FInputActionValue& /*Value*/)
 {
+	// 피격 또는 사망 중에는 공격 입력 차단
+	if (IsHit() || bIsDead)
+	{
+		return;
+	}
+
 	if (!IsValid(AttackComponent))
 	{
 		return;
@@ -626,10 +753,165 @@ void ABWPlayerCharacter::OnAttackHold(const FInputActionValue& /*Value*/)
 
 void ABWPlayerCharacter::OnHeavyAttack(const FInputActionValue& /*Value*/)
 {
+	// 피격 또는 사망 중에는 공격 입력 차단
+	if (IsHit() || bIsDead)
+	{
+		return;
+	}
+
 	if (!IsValid(AttackComponent))
 	{
 		return;
 	}
 
 	AttackComponent->RequestAttack(EBWAttackInputKind::Heavy);
+}
+
+// ── 피격 처리 (Enemy 패턴 이식) ──────────────────────────────────────────────
+
+EBWHitDirection ABWPlayerCharacter::ComputeHitDirection(const FVector& ShotDirection) const
+{
+	if (ShotDirection.IsNearlyZero())
+	{
+		return EBWHitDirection::Front;
+	}
+
+	// 피격자 → 공격자 방향 (수평 평면 투영)
+	FVector FromAttacker = -ShotDirection;
+	FromAttacker.Z = 0.f;
+	if (!FromAttacker.Normalize())
+	{
+		return EBWHitDirection::Front;
+	}
+
+	FVector Fwd = GetActorForwardVector();
+	Fwd.Z = 0.f;
+	Fwd.Normalize();
+
+	FVector Right = GetActorRightVector();
+	Right.Z = 0.f;
+	Right.Normalize();
+
+	const float ForwardDot = FVector::DotProduct(Fwd, FromAttacker);
+	const float RightDot   = FVector::DotProduct(Right, FromAttacker);
+
+	// COS45 ≈ 0.707 — 앞뒤를 ±45° 콘으로, 나머지를 좌우로 분류
+	constexpr float COS45 = 0.707f;
+
+	if (ForwardDot >= COS45)
+	{
+		return EBWHitDirection::Front;
+	}
+	else if (ForwardDot <= -COS45)
+	{
+		return EBWHitDirection::Back;
+	}
+	else if (RightDot > 0.f)
+	{
+		return EBWHitDirection::Right;
+	}
+	else
+	{
+		return EBWHitDirection::Left;
+	}
+}
+
+void ABWPlayerCharacter::PlayHitReaction(const FVector& ShotDirection)
+{
+	// 이미 사망 중이면 히트 리액션을 재생하지 않는다.
+	if (bIsDead)
+	{
+		return;
+	}
+
+	UAnimInstance* AnimInstance = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr;
+	if (!AnimInstance)
+	{
+		return;
+	}
+
+	const EBWHitDirection Direction = ComputeHitDirection(ShotDirection);
+
+	UAnimMontage* MontageToPlay = nullptr;
+	switch (Direction)
+	{
+	case EBWHitDirection::Front: MontageToPlay = HitReactFrontMontage; break;
+	case EBWHitDirection::Back:  MontageToPlay = HitReactBackMontage;  break;
+	case EBWHitDirection::Left:  MontageToPlay = HitReactLeftMontage;  break;
+	case EBWHitDirection::Right: MontageToPlay = HitReactRightMontage; break;
+	}
+
+	// 해당 방향 몽타주가 없으면 Front로 폴백
+	if (!MontageToPlay)
+	{
+		MontageToPlay = HitReactFrontMontage;
+	}
+
+	if (!MontageToPlay)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[BWPlayerCharacter] PlayHitReaction: 히트 리액션 몽타주가 설정되지 않았습니다."));
+		return;
+	}
+
+	// Character_State_Hit 태그 부착 — 이동·공격·구르기 입력 차단 시작
+	if (IsValid(StateComponent))
+	{
+		StateComponent->AddStateTag(BWGameplayTags::Character_State_Hit.GetTag());
+	}
+
+	// 히트 리액션 몽타주 재생
+	const float MontageLength = AnimInstance->Montage_Play(MontageToPlay);
+
+	if (MontageLength > 0.f)
+	{
+		// 종료 시 Hit 태그 제거 안전망
+		FOnMontageEnded EndDelegate;
+		EndDelegate.BindUObject(this, &ABWPlayerCharacter::OnHitReactionMontageEnded);
+		AnimInstance->Montage_SetEndDelegate(EndDelegate, MontageToPlay);
+	}
+	else
+	{
+		// 재생 실패 — Hit 태그 즉시 해제(입력 먹통 방지)
+		if (IsValid(StateComponent))
+		{
+			StateComponent->RemoveStateTag(BWGameplayTags::Character_State_Hit.GetTag());
+		}
+	}
+}
+
+void ABWPlayerCharacter::OnHitReactionMontageEnded(UAnimMontage* /*Montage*/, bool /*bInterrupted*/)
+{
+	// 정상 종료든 중단이든 Hit 상태를 확실히 해제한다(입력 먹통 방지 안전망).
+	if (IsValid(StateComponent))
+	{
+		StateComponent->RemoveStateTag(BWGameplayTags::Character_State_Hit.GetTag());
+	}
+}
+
+void ABWPlayerCharacter::PlayHitEffects(const FVector& ImpactPoint)
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	// Cascade 파티클 VFX 스폰
+	if (HitVFX)
+	{
+		UGameplayStatics::SpawnEmitterAtLocation(
+			World,
+			HitVFX,
+			ImpactPoint,
+			FRotator::ZeroRotator,
+			/*bAutoDestroy=*/true
+		);
+	}
+
+	// 사운드 재생
+	if (HitSound)
+	{
+		UGameplayStatics::PlaySoundAtLocation(World, HitSound, ImpactPoint);
+	}
 }

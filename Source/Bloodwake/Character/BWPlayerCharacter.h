@@ -4,6 +4,8 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
+#include "Combat/BWCombatInterface.h"
+#include "Combat/BWCombatTypes.h"
 #include "BWPlayerCharacter.generated.h"
 
 class USpringArmComponent;
@@ -17,22 +19,43 @@ class UBWCombatComponent;
 class UBWAttackComponent;
 class UBWTargetingComponent;
 class UAnimMontage;
+class UParticleSystem;
+class USoundBase;
 struct FInputActionValue;
 
 /**
  * 플레이어가 조작하는 3인칭 소울라이크 전투 캐릭터의 베이스 클래스.
  * 락온 기반 근접 전투를 위한 카메라 붐 + 팔로우 카메라 구성을 제공한다.
  * AttributeComponent(Health/Stamina/Focus), StateComponent(GameplayTagContainer), Sprint/Roll 입력 처리가 포함된다.
- * 스태미나 기반 Sprint: Hold IA 충족(Triggered) 시 SprintSpeed로 전환, 스태미나 소모, 0 고갈 시 중단 후 임계치 회복 시 자동 재개.
- * Roll: 별도 Tap IA(RollAction) 충족 시 Roll 상태 태그 부착 + RollMontage 재생. 몽타주의 AnimNotify가 EndRoll로 상태 해제. i-frame/스태미나 소모는 후속 작업.
+ * IBWCombatInterface 구현으로 공격 인터페이스 계약을 충족한다.
+ * 피격 시스템: TakeDamage 오버라이드 + 방향별 히트 리액션 + VFX/사운드 + 사망 처리(Enemy 패턴 이식).
+ * 1단계: GAS 미적용, 싱글플레이 전용.
  */
 UCLASS()
-class BLOODWAKE_API ABWPlayerCharacter : public ACharacter
+class BLOODWAKE_API ABWPlayerCharacter : public ACharacter, public IBWCombatInterface
 {
 	GENERATED_BODY()
 
 public:
 	ABWPlayerCharacter();
+
+	/**
+	 * 데미지 수신 오버라이드.
+	 * FPointDamageEvent에서 ImpactPoint/ShotDirection을 추출해
+	 * AttributeComponent에 위임 + 히트 리액션·VFX·사운드를 재생한다.
+	 * Dead/Hit 상태에서는 무시한다(bIsDead 가드).
+	 */
+	virtual float TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent,
+		AController* EventInstigator, AActor* DamageCauser) override;
+
+	// ── IBWCombatInterface 구현 ─────────────────────────────────────────────
+
+	/**
+	 * 인터페이스 계약 충족용 얇은 구현.
+	 * AttackComponent->RequestAttack(PrimaryTap)에 위임한다.
+	 * 플레이어는 BT가 직접 호출하지 않으므로 OnEnded는 미사용.
+	 */
+	virtual void PerformAttack(FOnMontageEnded OnEnded) override;
 
 protected:
 	virtual void BeginPlay() override;
@@ -61,6 +84,13 @@ public:
 	bool IsAttacking() const;
 
 	/**
+	 * 사망 상태인지 반환한다. AI(BWEnemyAIController) 등 외부에서 죽은 플레이어를
+	 * 추격/공격 대상에서 제외하는 판정에 사용한다. BP에서도 조회 가능.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Combat")
+	bool IsDead() const { return bIsDead; }
+
+	/**
 	 * 현재 락온 중인지 반환한다. AnimInstance / BP에서 조회한다.
 	 * TargetingComponent->IsLockedOn()에 위임한다.
 	 * Thread-safe: 캐시된 bool(bIsLockedOnCached)을 반환해 워커 스레드(AnimInstance) 안전.
@@ -79,7 +109,7 @@ public:
 	}
 
 protected:
-	/** MoveAction 콜백: 컨트롤러 Yaw 기준으로 입력 벡터를 월드 이동 방향으로 변환해 이동한다. 구르기/공격 중에는 무시한다. */
+	/** MoveAction 콜백: 컨트롤러 Yaw 기준으로 입력 벡터를 월드 이동 방향으로 변환해 이동한다. 구르기/공격/피격/사망 중에는 무시한다. */
 	void Move(const FInputActionValue& Value);
 
 	/** LockOnAction(Started) 콜백 — IA_LockOn 누르는 순간. TargetingComponent->ToggleLockOn()에 위임한다. */
@@ -97,6 +127,7 @@ protected:
 	 * AttackAction(Started) 콜백 — IA_Attack 누르는 순간.
 	 * AttackComponent->RequestAttack(PrimaryTap)에 위임한다.
 	 * Sprint 태그 보유 중이면 Running, 아니면 Light로 분기(컴포넌트 내부 처리).
+	 * 피격/사망 중에는 차단한다.
 	 */
 	void OnAttackStarted(const FInputActionValue& Value);
 
@@ -135,7 +166,7 @@ protected:
 	/** LookAction 콜백: 마우스/우스틱 입력을 컨트롤러 회전(Yaw/Pitch)에 적용한다. */
 	void Look(const FInputActionValue& Value);
 
-	/** JumpAction(Started) 콜백: 구르기 중이 아니면 ACharacter::Jump를 호출한다. */
+	/** JumpAction(Started) 콜백: 구르기/피격/사망 중이 아니면 ACharacter::Jump를 호출한다. */
 	void StartJump();
 
 	/**
@@ -145,13 +176,15 @@ protected:
 	UFUNCTION(BlueprintPure, Category = "Combat|Roll")
 	bool IsRolling() const;
 
+	/** 현재 피격(Character.State.Hit) 상태인지 확인한다. 이동·공격·구르기 차단 판정에 사용. */
+	UFUNCTION(BlueprintPure, Category = "Combat")
+	bool IsHit() const;
+
 	// ── Sprint / Roll 입력 콜백 ─────────────────────────────────────
 
 	/**
 	 * SprintAction(Hold 전용 IA) Triggered 바인딩.
 	 * Hold 임계 시간 충족 시 1회 호출된다. 조건 충족 시 질주를 시작한다.
-	 * 주의: 기존 Started(누르자마자) 시작에서 Triggered(Hold 충족) 시작으로 변경됨.
-	 *       Hold Time Threshold는 에디터 IA 에셋에서 튜닝한다(예: 0.15~0.2s).
 	 */
 	void StartSprint(const FInputActionValue& Value);
 
@@ -162,7 +195,6 @@ protected:
 	 * RollAction(Tap 전용 IA) Triggered 바인딩.
 	 * 짧은 탭 입력 충족 시 Roll 상태 태그를 부착하고 RollMontage를 재생한다.
 	 * 상태 해제는 몽타주에 배치한 AnimNotify(→ EndRoll)가 담당한다.
-	 * TODO(후속): 스태미나 소모 체크, i-frame 활성화.
 	 */
 	void Roll(const FInputActionValue& Value);
 
@@ -194,6 +226,14 @@ protected:
 	UFUNCTION()
 	void HandleStaminaChanged(float NewValue, float MaxValue);
 
+	/**
+	 * OnDeath 구독 콜백. 체력 0 도달 시 호출된다.
+	 * 입력을 차단하고 DeathMontage를 재생한다(미설정 시 랙돌 폴백).
+	 * UFUNCTION 필수(AddDynamic 요구).
+	 */
+	UFUNCTION()
+	void HandleDeath();
+
 	/** 질주를 시작할 수 있는 조건을 확인한다. */
 	bool CanSprint() const;
 
@@ -222,67 +262,30 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> JumpAction;
 
-	/**
-	 * Sprint(Hold) 전용 입력 액션. BP 자식에서 IA_Sprint 에셋을 지정한다.
-	 * 에셋에 UInputTriggerHold를 부착해 Hold 충족 시 Triggered가 발생하도록 설정한다(에디터 작업).
-	 * 같은 물리 키에 RollAction(Tap IA)도 함께 IMC에 매핑한다.
-	 */
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> SprintAction;
 
-	/**
-	 * Roll(Tap) 전용 입력 액션. BP 자식에서 IA_Roll 에셋을 지정한다(신규 에셋, 에디터 후속 작업).
-	 * 에셋에 UInputTriggerTap을 부착해 짧은 탭 충족 시 Triggered가 발생하도록 설정한다.
-	 */
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> RollAction;
 
-	/**
-	 * Interact 입력 액션. BP 자식에서 IA_Interact 에셋을 지정한다.
-	 * 누르는 순간 1회(Started) 발동 — 구체 스윕으로 근처 픽업을 감지해 장착을 시도한다.
-	 */
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> InteractAction;
 
-	/**
-	 * 무기 손↔등 토글 입력 액션. BP 자식에서 IA_ToggleWeapon 에셋을 지정한다.
-	 * 누르는 순간 1회(Started) 발동 — CombatComponent->ToggleWeapon()에 위임한다.
-	 */
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> ToggleWeaponAction;
 
-	/**
-	 * 방패 손↔등 토글 입력 액션. BP 자식에서 IA_ToggleShield 에셋을 지정한다.
-	 * 누르는 순간 1회(Started) 발동 — CombatComponent->ToggleShield()에 위임한다.
-	 */
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> ToggleShieldAction;
 
-	/**
-	 * Attack(약공격·대쉬·특수) 입력 액션. BP 자식에서 IA_Attack 에셋을 지정한다.
-	 * IA 에셋에 Hold 트리거를 붙여 Started(Tap)와 Triggered(Hold) 두 이벤트로 분기한다(에디터 작업).
-	 */
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> AttackAction;
 
-	/**
-	 * Heavy 공격 입력 액션. BP 자식에서 IA_HeavyAttack 에셋을 지정한다.
-	 * 누르는 순간 1회(Started) 발동.
-	 */
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> HeavyAttackAction;
 
-	/**
-	 * 락온 토글 입력 액션. BP 자식에서 IA_LockOn 에셋을 지정한다.
-	 * 누르는 순간 1회(Started) 발동 — 락온 ON/OFF 토글.
-	 */
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> LockOnAction;
 
-	/**
-	 * 타깃 전환 입력 액션. BP 자식에서 IA_SwitchTarget 에셋을 지정한다.
-	 * Axis1D(좌/우). 락온 중에만 유효하다.
-	 */
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> SwitchTargetAction;
 
@@ -331,11 +334,7 @@ protected:
 
 	// ── Roll(회피) 데이터 (BP 자식에서 설정) ────────────────────────
 
-	/**
-	 * 회피(Roll) 시 재생할 몽타주. BP 자식에서 AM_ 회피 몽타주를 지정한다.
-	 * 몽타주 종료 지점에 커스텀 AnimNotify("RollEnd")를 배치하면
-	 * UBWPlayerAnimInstance::AnimNotify_RollEnd가 호출되어 EndRoll로 상태가 해제된다(에디터 작업).
-	 */
+	/** 회피(Roll) 시 재생할 몽타주. BP 자식에서 AM_ 회피 몽타주를 지정한다. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Roll")
 	TObjectPtr<UAnimMontage> RollMontage;
 
@@ -361,10 +360,7 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Movement|Sprint", meta = (ClampMin = "0.01"))
 	float SprintStaminaDrainInterval = 0.1f;
 
-	/**
-	 * 스태미나 0 고갈 후 자동 재개 기준값.
-	 * 현재 스태미나가 이 값 이상으로 회복되면 버튼이 눌린 상태일 때 자동으로 질주를 재개한다.
-	 */
+	/** 스태미나 0 고갈 후 자동 재개 기준값. 이 값 이상 회복되면 버튼이 눌린 상태일 때 자동으로 질주를 재개한다. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Movement|Sprint", meta = (ClampMin = "0.0"))
 	float SprintResumeThreshold = 15.f;
 
@@ -373,6 +369,49 @@ protected:
 	/** 현재 질주 중인지 여부(에디터 디버그용). */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Movement|Sprint")
 	bool bIsSprinting = false;
+
+	// ── BP 설정용 — 4방향 히트 리액션 몽타주 (Enemy 패턴 이식) ────
+
+	/** 정면 피격 히트 리액션 몽타주. BP 자식에서 AM_ 에셋 지정. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Player|HitReaction")
+	TObjectPtr<UAnimMontage> HitReactFrontMontage;
+
+	/** 후방 피격 히트 리액션 몽타주. BP 자식에서 AM_ 에셋 지정. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Player|HitReaction")
+	TObjectPtr<UAnimMontage> HitReactBackMontage;
+
+	/** 왼쪽 피격 히트 리액션 몽타주. BP 자식에서 AM_ 에셋 지정. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Player|HitReaction")
+	TObjectPtr<UAnimMontage> HitReactLeftMontage;
+
+	/** 오른쪽 피격 히트 리액션 몽타주. BP 자식에서 AM_ 에셋 지정. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Player|HitReaction")
+	TObjectPtr<UAnimMontage> HitReactRightMontage;
+
+	// ── BP 설정용 — 피격 VFX·사운드 ──────────────────────────────
+
+	/** 피격 Cascade 파티클 VFX. ImpactPoint에 스폰된다. BP 자식에서 P_ 에셋 지정. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Player|HitEffects")
+	TObjectPtr<UParticleSystem> HitVFX;
+
+	/** 피격 사운드(MetaSound/SoundWave 등 USoundBase 호환). ImpactPoint에 재생. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Player|HitEffects")
+	TObjectPtr<USoundBase> HitSound;
+
+	// ── BP 설정용 — 사망 ──────────────────────────────────────────
+
+	/**
+	 * 사망 시 재생할 몽타주. BP 자식에서 AM_ 에셋 지정.
+	 * null이면 랙돌로 폴백한다.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Player|Death")
+	TObjectPtr<UAnimMontage> DeathMontage;
+
+	// ── 런타임 상태 ─────────────────────────────────────────────────
+
+	/** 사망 여부. TakeDamage 재진입 차단 및 HandleDeath 중복 진입 방지. */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Player|Death")
+	bool bIsDead = false;
 
 private:
 	/** Sprint 버튼이 눌린 채로 유지되고 있는지 여부. 자동 재개 판정에 사용. */
@@ -387,4 +426,37 @@ private:
 	 * TargetingComponent가 StartLockOn/EndLockOn 시 SetIsLockedOnCached를 통해 갱신한다.
 	 */
 	bool bIsLockedOnCached = false;
+
+	// ── 피격 처리 헬퍼 (Enemy 패턴 복제) ───────────────────────────
+
+	/**
+	 * ShotDirection과 피격자 forward/right 내적으로 4방향을 분류한다.
+	 * Front(±45°) / Back / Left / Right.
+	 */
+	EBWHitDirection ComputeHitDirection(const FVector& ShotDirection) const;
+
+	/**
+	 * 분류된 방향에 따라 해당 히트 리액션 몽타주를 재생하고 Character_State_Hit 태그를 부착한다.
+	 * 몽타주 종료 시 Character_State_Hit 태그를 제거하는 안전망 콜백을 바인딩한다.
+	 * 해당 방향 몽타주가 null이면 Front로 폴백, Front도 null이면 Warning.
+	 */
+	void PlayHitReaction(const FVector& ShotDirection);
+
+	/**
+	 * 히트 리액션 몽타주 종료 콜백. Character_State_Hit 태그를 제거한다.
+	 * 안전망: 정상 종료든 중단이든 Hit 상태가 남아 입력이 먹통이 되지 않도록 보장.
+	 */
+	void OnHitReactionMontageEnded(UAnimMontage* Montage, bool bInterrupted);
+
+	/**
+	 * ImpactPoint에 Cascade 파티클 VFX 스폰 + 사운드 재생.
+	 * HitVFX/HitSound가 설정되지 않으면 조용히 건너뛴다.
+	 */
+	void PlayHitEffects(const FVector& ImpactPoint);
+
+	/**
+	 * 사망 처리. 사망 연출(DeathMontage) 또는 랙돌 폴백.
+	 * 내부적으로 HandleDeath에서 호출된다.
+	 */
+	void EnableDeathState();
 };
