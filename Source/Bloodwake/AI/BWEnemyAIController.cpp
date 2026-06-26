@@ -159,6 +159,7 @@ void ABWEnemyAIController::UpdateTarget()
 		return;
 	}
 
+	// ── 1) 시야 후보 ─────────────────────────────────────────────────────────
 	// "기억하고 있는" 인지 액터 목록을 가져온다.
 	// GetCurrentlyPerceivedActors(지금 보이는 것만)와 달리, GetKnownPerceivedActors는
 	// 한 번 인지한 뒤 SightMaxAge가 만료되기 전까지 액터를 유지한다.
@@ -167,8 +168,8 @@ void ABWEnemyAIController::UpdateTarget()
 	AIPerception->GetKnownPerceivedActors(UAISense_Sight::StaticClass(), PerceivedActors);
 
 	// 인지된 액터 중 첫 번째 ABWPlayerCharacter를 추격 대상으로 삼는다.
-	// 단, 사망한 플레이어는 추격/공격 대상에서 제외한다(아래 Target 미설정 → 순찰 복귀).
-	ABWPlayerCharacter* FoundPlayer = nullptr;
+	// 단, 사망한 플레이어는 추격/공격 대상에서 제외한다.
+	ABWPlayerCharacter* SightPlayer = nullptr;
 	for (AActor* Actor : PerceivedActors)
 	{
 		if (ABWPlayerCharacter* Player = Cast<ABWPlayerCharacter>(Actor))
@@ -178,32 +179,63 @@ void ABWEnemyAIController::UpdateTarget()
 				continue;
 			}
 
-			FoundPlayer = Player;
+			SightPlayer = Player;
 			break;
 		}
 	}
 
-	// 리쉬(leash) — 기억하고 있어도 실제 거리가 LoseSightRadius를 넘으면 추격을 포기한다.
-	// GetKnownPerceivedActors는 시야가 끊겨도 MaxAge 동안 액터를 유지하므로, 추격 중 거리를
-	// 좁혀 재인지되면 age가 리셋되어 MaxAge가 영원히 만료되지 않는 무한 추격이 발생한다.
-	// 거리 기준 컷오프로 "너무 멀어지면 포기"를 결정적으로 보장한다.
-	if (FoundPlayer)
+	const float Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
+
+	// ── 2) 시야로 보이면 "기억 타깃"을 갱신한다 ────────────────────────────────
+	if (SightPlayer)
 	{
-		if (const APawn* ControlledPawn = GetPawn())
+		RememberedTarget = SightPlayer;
+		ForgetTargetTime = Now + TargetMemoryDuration;
+	}
+
+	// ── 3) 유효 타깃 결정 — 시야 우선, 없으면 아직 안 잊은 기억 타깃 ──────────────
+	// 기억 타깃은 시야 밖 피격(HandlePerceptionUpdated의 Damage 분기)으로도 설정된다.
+	// 이 폴백이 없으면 피격으로 막 잡은 타깃이 다음 0.1초 폴링에서 즉시 지워진다(플리커 원인).
+	AActor* EffectiveTarget = SightPlayer;
+	if (!EffectiveTarget && RememberedTarget.IsValid() && Now < ForgetTargetTime)
+	{
+		if (ABWPlayerCharacter* Remembered = Cast<ABWPlayerCharacter>(RememberedTarget.Get()))
 		{
-			const float DistSq = FVector::DistSquared(
-				ControlledPawn->GetActorLocation(), FoundPlayer->GetActorLocation());
-			if (DistSq > FMath::Square(LoseSightRadius))
+			if (!Remembered->IsDead())
 			{
-				FoundPlayer = nullptr;
+				EffectiveTarget = Remembered;
 			}
 		}
 	}
 
-	const bool bHasTarget = (FoundPlayer != nullptr);
+	// ── 4) 리쉬(leash) — 실제 거리가 LoseSightRadius를 넘으면 추격을 포기한다 ──────
+	// GetKnownPerceivedActors는 시야가 끊겨도 MaxAge 동안 액터를 유지하므로, 거리 컷오프로
+	// "너무 멀어지면 포기"를 결정적으로 보장한다(무한 추격 방지).
+	if (EffectiveTarget)
+	{
+		if (const APawn* ControlledPawn = GetPawn())
+		{
+			const float DistSq = FVector::DistSquared(
+				ControlledPawn->GetActorLocation(), EffectiveTarget->GetActorLocation());
+			if (DistSq > FMath::Square(LoseSightRadius))
+			{
+				EffectiveTarget = nullptr;
+				RememberedTarget.Reset();
+			}
+		}
+	}
+
+	// ── 5) 기억 만료/무효 정리 ─────────────────────────────────────────────────
+	if (!EffectiveTarget)
+	{
+		RememberedTarget.Reset();
+	}
+
+	// ── 6) 블랙보드 반영 ───────────────────────────────────────────────────────
+	const bool bHasTarget = (EffectiveTarget != nullptr);
 	if (bHasTarget)
 	{
-		BB->SetValueAsObject(TargetBlackboardKey, FoundPlayer);
+		BB->SetValueAsObject(TargetBlackboardKey, EffectiveTarget);
 	}
 	else
 	{
@@ -248,44 +280,31 @@ void ABWEnemyAIController::HandlePerceptionUpdated(AActor* Actor, FAIStimulus St
 	}
 
 	// ── Damage 자극 ───────────────────────────────────────────────────────────
-	// 시야 밖에서 피격(Damage 자극)됐을 때, 이미 Target이 없으면 데미지 유발 액터를 임시 Target으로 설정해
-	// 추격·HP 바 표시를 즉시 시작한다. 이미 Target이 있으면 기존 Sight 추적을 유지한다.
+	// 시야 밖에서 피격(Damage 자극)됐을 때, 데미지 유발자(플레이어)를 "기억 타깃"으로 잡고
+	// UpdateTarget으로 일원화 반영한다. UpdateTarget이 시야 우선 + 기억 폴백 + 전환/HP바를
+	// 모두 처리하므로(SSOT), 여기서 블랙보드를 직접 쓰지 않는다.
+	// 기억 타깃을 먼저 세팅하므로, 시야가 비어 있어도 이번 UpdateTarget에서 추격이 시작되고
+	// 다음 0.1초 폴링에서도 ForgetTargetTime 전까지 유지된다(즉시 지워지던 플리커 해결).
 	if (Stimulus.Type == DamageSenseID)
 	{
-		UBlackboardComponent* BB = GetBlackboardComponent();
-		if (!BB)
+		ABWPlayerCharacter* Player = Cast<ABWPlayerCharacter>(Actor);
+		if (!Player || Player->IsDead())
 		{
 			return;
 		}
 
-		// 이미 Target이 설정돼 있으면 Sight 추적을 방해하지 않는다.
-		if (UObject* ExistingTarget = BB->GetValueAsObject(TargetBlackboardKey))
-		{
-			if (IsValid(ExistingTarget))
-			{
-				return;
-			}
-		}
+		RememberedTarget = Player;
+		ForgetTargetTime = (GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f) + TargetMemoryDuration;
 
-		// Actor가 유효한 ABWPlayerCharacter인지 확인한 뒤 임시 Target으로 설정한다.
-		// (데미지 유발자 = HandlePerceptionUpdated의 Actor 인자)
-		if (!IsValid(Actor))
-		{
-			return;
-		}
-
-		BB->SetValueAsObject(TargetBlackboardKey, Actor);
-
-		// 순찰→추격 전환이 아직 이뤄지지 않은 경우 이동 속도 변경 + HP 바 표시.
-		if (!bIsChasing)
-		{
-			bIsChasing = true;
-			ApplyMovementSpeed(ChaseSpeed);
-
-			if (CachedEnemy.IsValid())
-			{
-				CachedEnemy->ShowHealthBar();
-			}
-		}
+		UpdateTarget();
 	}
+}
+
+AActor* ABWEnemyAIController::GetCurrentTarget() const
+{
+	if (const UBlackboardComponent* BB = GetBlackboardComponent())
+	{
+		return Cast<AActor>(BB->GetValueAsObject(TargetBlackboardKey));
+	}
+	return nullptr;
 }

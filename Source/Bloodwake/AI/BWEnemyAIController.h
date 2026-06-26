@@ -28,6 +28,12 @@ class BLOODWAKE_API ABWEnemyAIController : public AAIController
 public:
 	ABWEnemyAIController();
 
+	/**
+	 * 현재 추격 중인 타깃(블랙보드 Target 키 값)을 반환한다. 없으면 nullptr.
+	 * UBWBTTask_PerformAttack이 공격 직전 조준 회전 대상으로 사용한다.
+	 */
+	AActor* GetCurrentTarget() const;
+
 protected:
 	/** Pawn 빙의 시 BT 실행 + Perception 델리게이트 바인딩 + UpdateTarget 타이머 시작. */
 	virtual void OnPossess(APawn* InPawn) override;
@@ -108,6 +114,14 @@ protected:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "AI|Perception", meta = (ClampMin = "0.0"))
 	float SightMaxAge = 5.f;
 
+	/**
+	 * 시야/피격으로 잃은 뒤에도 타깃을 추격으로 "기억"하는 시간(초).
+	 * 0.1초 폴링(UpdateTarget)이 피격으로 막 잡은 타깃을 즉시 지우는 것을 방지한다.
+	 * 시야로 다시 보거나 추가 피격이 들어오면 갱신된다. 0이면 즉시 망각.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "AI|Perception", meta = (ClampMin = "0.0"))
+	float TargetMemoryDuration = 3.f;
+
 	// ── 이동 속도(순찰/추격 분리) ───────────────────────────────────────────────
 
 	/** 순찰 중 이동 속도(cm/s). 추격보다 느리게 둔다. BP에서 튜닝. */
@@ -133,6 +147,16 @@ private:
 
 	/** 현재 추격 중인지 여부. 순찰↔추격 전환 시에만 이동 속도를 바꾸기 위한 상태 캐시. */
 	bool bIsChasing = false;
+
+	/**
+	 * 시야 또는 피격으로 잡은 "기억 타깃"의 약참조. UpdateTarget이 단일 소유(SSOT)한다.
+	 * 시야 known-list가 비어도 ForgetTargetTime 전까지는 이 타깃으로 추격을 유지해,
+	 * 0.1초 폴링이 피격 타깃을 즉시 지우는 플리커를 막는다.
+	 */
+	TWeakObjectPtr<AActor> RememberedTarget;
+
+	/** RememberedTarget을 잊는 월드 시각(초). GetWorld()->GetTimeSeconds() 기준. */
+	float ForgetTargetTime = 0.f;
 
 	/**
 	 * 빙의 중인 ABWEnemy의 약참조. OnPossess에서 캐시, OnUnPossess에서 무효화.

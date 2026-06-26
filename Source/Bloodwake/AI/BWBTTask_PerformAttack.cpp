@@ -11,6 +11,7 @@
 #include "Combat/BWCombatInterface.h"
 #include "Core/BWGameplayDefine.h"
 #include "AI/BWAILog.h"
+#include "AI/BWEnemyAIController.h"
 
 UBWBTTask_PerformAttack::UBWBTTask_PerformAttack()
 {
@@ -47,6 +48,26 @@ EBTNodeResult::Type UBWBTTask_PerformAttack::ExecuteTask(UBehaviorTreeComponent&
 		UE_LOG(LogBWAI, Warning, TEXT("[BWBTTask_PerformAttack] ABWEnemy가 IBWCombatInterface를 구현하지 않습니다. (%s)"),
 			*Enemy->GetName());
 		return EBTNodeResult::Failed;
+	}
+
+	// ── 공격 직전 타깃 조준 회전 ──────────────────────────────────────────────
+	// 적은 bOrientRotationToMovement=true(이동 방향으로만 회전)라, 사거리에서 멈춰 공격하면
+	// 플레이어를 향하지 않아 헛스윙한다. 공격 커밋 직전 yaw를 타깃 쪽으로 즉시 정렬해
+	// "플레이어를 바라본 상태로 공격"을 보장한다(소울라이크식 조준 후 커밋).
+	if (ABWEnemyAIController* EnemyAI = Cast<ABWEnemyAIController>(AIController))
+	{
+		if (const AActor* Target = EnemyAI->GetCurrentTarget())
+		{
+			FVector ToTarget = Target->GetActorLocation() - Enemy->GetActorLocation();
+			ToTarget.Z = 0.f;
+			if (!ToTarget.IsNearlyZero())
+			{
+				FRotator FaceRotation = ToTarget.Rotation();
+				FaceRotation.Pitch = 0.f;
+				FaceRotation.Roll = 0.f;
+				Enemy->SetActorRotation(FaceRotation);
+			}
+		}
 	}
 
 	// ── 완료 콜백 바인딩 ──────────────────────────────────────────────────────
