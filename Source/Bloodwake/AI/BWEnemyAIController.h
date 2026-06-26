@@ -9,7 +9,9 @@
 
 class UAIPerceptionComponent;
 class UAISenseConfig_Sight;
+class UAISenseConfig_Damage;
 class UBehaviorTree;
+class ABWEnemy;
 struct FAIStimulus;
 
 /**
@@ -72,6 +74,14 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "AI|Perception")
 	TObjectPtr<UAISenseConfig_Sight> SightConfig;
 
+	/**
+	 * Damage 감각 설정. 생성자에서 생성해 AIPerception에 ConfigureSense.
+	 * TakeDamage에서 UAISense_Damage::ReportDamageEvent 호출 시 이 감각이 자극을 수신한다.
+	 * 시야 밖 피격 보조 역할 — 타깃 결정 SSOT는 Target 블랙보드 키 유지.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "AI|Perception")
+	TObjectPtr<UAISenseConfig_Damage> DamageConfig;
+
 	// ── BP 설정용 데이터 ──────────────────────────────────────────────────────
 
 	/** 이 적이 실행할 BehaviorTree. BP 자식(BP_EnemyAIController)에서 BT_Enemy 에셋 지정. */
@@ -123,4 +133,11 @@ private:
 
 	/** 현재 추격 중인지 여부. 순찰↔추격 전환 시에만 이동 속도를 바꾸기 위한 상태 캐시. */
 	bool bIsChasing = false;
+
+	/**
+	 * 빙의 중인 ABWEnemy의 약참조. OnPossess에서 캐시, OnUnPossess에서 무효화.
+	 * 소유하지 않으므로 TWeakObjectPtr 사용(CLAUDE.md 3.3).
+	 * UpdateTarget에서 매 호출 Cast를 피하기 위한 캐시 (CLAUDE.md 4.1).
+	 */
+	TWeakObjectPtr<ABWEnemy> CachedEnemy;
 };

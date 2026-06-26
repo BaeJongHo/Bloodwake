@@ -5,12 +5,14 @@
 #include "Perception/AIPerceptionComponent.h"
 #include "Perception/AISenseConfig_Sight.h"
 #include "Perception/AISense_Sight.h"
+#include "Perception/AISenseConfig_Damage.h"
 #include "BehaviorTree/BlackboardComponent.h"
 #include "BehaviorTree/BehaviorTreeComponent.h"
 #include "BehaviorTree/BehaviorTree.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Character/BWPlayerCharacter.h"
+#include "Character/BWEnemy.h"
 
 ABWEnemyAIController::ABWEnemyAIController()
 {
@@ -32,6 +34,13 @@ ABWEnemyAIController::ABWEnemyAIController()
 	// 1차 적용: 생성자 기본값으로 SightConfig를 초기화.
 	// BP 아키타입 오버라이드는 아직 반영되지 않은 상태이므로, BeginPlay에서 ApplySightConfig를 다시 호출한다.
 	ApplySightConfig();
+
+	// ── DamageConfig 구성 ─────────────────────────────────────────────────────
+	// Damage 감각: ABWEnemy::TakeDamage에서 UAISense_Damage::ReportDamageEvent를 호출하면
+	// 이 감각이 자극을 수신해 HandlePerceptionUpdated 콜백을 발생시킨다.
+	// 타깃 결정 SSOT는 Sight 기반 Target 블랙보드 키를 유지(DominantSense = Sight).
+	DamageConfig = CreateDefaultSubobject<UAISenseConfig_Damage>(TEXT("DamageConfig"));
+	AIPerception->ConfigureSense(*DamageConfig);
 
 	AIPerception->SetDominantSense(SightConfig->GetSenseImplementation());
 }
@@ -84,6 +93,9 @@ void ABWEnemyAIController::OnPossess(APawn* InPawn)
 			this, &ABWEnemyAIController::HandlePerceptionUpdated);
 	}
 
+	// OnPossess에서 CachedEnemy 캐시 — 매 UpdateTarget 호출마다 Cast를 피한다(CLAUDE.md 4.1).
+	CachedEnemy = Cast<ABWEnemy>(InPawn);
+
 	// 초기 이동 속도 = 순찰 속도. 이후 추격 진입 시 UpdateTarget에서 ChaseSpeed로 전환.
 	bIsChasing = false;
 	ApplyMovementSpeed(PatrolSpeed);
@@ -126,6 +138,9 @@ void ABWEnemyAIController::OnUnPossess()
 	{
 		BTComp->StopLogic(TEXT("Controller UnPossess"));
 	}
+
+	// CachedEnemy 무효화 — 댕글링 참조 방지.
+	CachedEnemy.Reset();
 
 	Super::OnUnPossess();
 }
@@ -195,16 +210,82 @@ void ABWEnemyAIController::UpdateTarget()
 		BB->ClearValue(TargetBlackboardKey);
 	}
 
-	// 순찰↔추격 전환 시에만 이동 속도를 변경한다(매 타이머 틱 재설정 방지).
+	// 순찰↔추격 전환 시에만 이동 속도 변경 + HP 바 표시/숨김을 처리한다(매 타이머 틱 재설정 방지).
 	if (bHasTarget != bIsChasing)
 	{
 		bIsChasing = bHasTarget;
 		ApplyMovementSpeed(bIsChasing ? ChaseSpeed : PatrolSpeed);
+
+		// CachedEnemy를 통해 HP 바 표시/숨김 전환. 추격 시작 → ShowHealthBar, 종료 → HideHealthBar.
+		if (CachedEnemy.IsValid())
+		{
+			if (bIsChasing)
+			{
+				CachedEnemy->ShowHealthBar();
+			}
+			else
+			{
+				CachedEnemy->HideHealthBar();
+			}
+		}
 	}
 }
 
 void ABWEnemyAIController::HandlePerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 {
-	// 인지 이벤트 발생 즉시 UpdateTarget을 호출해 타이머 주기를 기다리지 않고 즉각 반응.
-	UpdateTarget();
+	// 자극 종류를 확인해 Sight와 Damage를 분리 처리한다 (ue-reviewer [D]).
+	// ── Sight 자극 ────────────────────────────────────────────────────────────
+	// Sight known-list 기반 UpdateTarget이 Target 블랙보드 키 SSOT이므로
+	// Sight 이벤트에서만 기존 UpdateTarget()을 호출해 순찰↔추격 전환 로직을 실행한다.
+	const FAISenseID SightSenseID  = UAISense::GetSenseID<UAISense_Sight>();
+	const FAISenseID DamageSenseID = UAISense::GetSenseID<UAISense_Damage>();
+
+	if (Stimulus.Type == SightSenseID)
+	{
+		// 시야 이벤트: 기존 동작 그대로 — Known-list를 읽어 Target 키 갱신.
+		UpdateTarget();
+		return;
+	}
+
+	// ── Damage 자극 ───────────────────────────────────────────────────────────
+	// 시야 밖에서 피격(Damage 자극)됐을 때, 이미 Target이 없으면 데미지 유발 액터를 임시 Target으로 설정해
+	// 추격·HP 바 표시를 즉시 시작한다. 이미 Target이 있으면 기존 Sight 추적을 유지한다.
+	if (Stimulus.Type == DamageSenseID)
+	{
+		UBlackboardComponent* BB = GetBlackboardComponent();
+		if (!BB)
+		{
+			return;
+		}
+
+		// 이미 Target이 설정돼 있으면 Sight 추적을 방해하지 않는다.
+		if (UObject* ExistingTarget = BB->GetValueAsObject(TargetBlackboardKey))
+		{
+			if (IsValid(ExistingTarget))
+			{
+				return;
+			}
+		}
+
+		// Actor가 유효한 ABWPlayerCharacter인지 확인한 뒤 임시 Target으로 설정한다.
+		// (데미지 유발자 = HandlePerceptionUpdated의 Actor 인자)
+		if (!IsValid(Actor))
+		{
+			return;
+		}
+
+		BB->SetValueAsObject(TargetBlackboardKey, Actor);
+
+		// 순찰→추격 전환이 아직 이뤄지지 않은 경우 이동 속도 변경 + HP 바 표시.
+		if (!bIsChasing)
+		{
+			bIsChasing = true;
+			ApplyMovementSpeed(ChaseSpeed);
+
+			if (CachedEnemy.IsValid())
+			{
+				CachedEnemy->ShowHealthBar();
+			}
+		}
+	}
 }

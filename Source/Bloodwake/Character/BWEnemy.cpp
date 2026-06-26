@@ -20,11 +20,16 @@
 #include "Character/BWStateComponent.h"
 #include "Core/BWGameplayDefine.h"
 #include "Equipment/BWWeapon.h"
+#include "UI/BWEnemyHealthBarComponent.h"
+#include "Perception/AISense_Damage.h"
 
 ABWEnemy::ABWEnemy()
 {
 	// 적은 이벤트/입력 기반이므로 매 프레임 틱 비활성.
 	PrimaryActorTick.bCanEverTick = false;
+
+	bUseControllerRotationYaw = false;
+	GetCharacterMovement()->bOrientRotationToMovement = true;
 
 	// AttributeComponent — 체력·스태미나·기력 관리 (플레이어와 동일 패턴)
 	AttributeComponent = CreateDefaultSubobject<UBWAttributeComponent>(TEXT("AttributeComponent"));
@@ -45,6 +50,11 @@ ABWEnemy::ABWEnemy()
 	// LockOnWidget — Screen-space 락온 마커. 기본 숨김, 타깃 시 ShowMarker 호출.
 	LockOnWidget = CreateDefaultSubobject<UBWLockOnWidgetComponent>(TEXT("LockOnWidget"));
 	LockOnWidget->SetupAttachment(RootComponent);
+
+	// HealthBarWidget — 머리 위 Screen-space HP 바. 기본 숨김, 감지 시 ShowBar 호출.
+	// Widget Class(WBP_EnemyHealthBar)는 BP 자식의 "(상속됨)" 컴포넌트에서 지정한다.
+	HealthBarWidget = CreateDefaultSubobject<UBWEnemyHealthBarComponent>(TEXT("HealthBarWidget"));
+	HealthBarWidget->SetupAttachment(RootComponent);
 }
 
 void ABWEnemy::BeginPlay()
@@ -267,6 +277,34 @@ float ABWEnemy::TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent,
 	PlayHitEffects(ImpactPoint);
 	PlayHitReaction(ShotDirection);
 
+	// AI Damage 감각 보고 — 시야 밖 피격 시에도 공격자 위치를 Perception에 인지시킨다.
+	// Instigator가 있어야 Perception이 자극원을 올바르게 기록한다.
+	if (IsValid(EventInstigator))
+	{
+		// 공격자 위치: DamageCauser(무기 등)가 있으면 그 위치, 없으면 적 본인 위치를 폴백으로 사용.
+		const FVector EventLocation = IsValid(DamageCauser)
+			? DamageCauser->GetActorLocation()
+			: GetActorLocation();
+
+		// Instigator Pawn(플레이어 캐릭터)을 자극원으로 보고한다.
+		// GetPawn()이 null인 경우(예: AIController가 직접 Instigator인 경우)는 없지만 null 가드.
+		AActor* InstigatorActor = IsValid(EventInstigator->GetPawn())
+			? static_cast<AActor*>(EventInstigator->GetPawn())
+			: nullptr;
+
+		if (IsValid(InstigatorActor))
+		{
+			UAISense_Damage::ReportDamageEvent(
+				this,               // WorldContextObject
+				this,               // DamagedActor (이 적)
+				InstigatorActor,    // Instigator (공격자 Pawn)
+				ActualDamage,       // Amount
+				EventLocation,      // EventLocation (공격자/무기 위치)
+				GetActorLocation()  // HitLocation (피격 지점)
+			);
+		}
+	}
+
 	return ActualDamage;
 }
 
@@ -281,6 +319,24 @@ void ABWEnemy::HandleDeath()
 	}
 
 	EnableRagdoll();
+}
+
+// ── HP 바 표시/숨김 API ────────────────────────────────────────────────────────
+
+void ABWEnemy::ShowHealthBar()
+{
+	if (IsValid(HealthBarWidget))
+	{
+		HealthBarWidget->ShowBar();
+	}
+}
+
+void ABWEnemy::HideHealthBar()
+{
+	if (IsValid(HealthBarWidget))
+	{
+		HealthBarWidget->HideBar();
+	}
 }
 
 // ── private 구현부 ────────────────────────────────────────────────────────────
@@ -465,6 +521,12 @@ void ABWEnemy::EnableRagdoll()
 	if (IsValid(LockOnWidget))
 	{
 		LockOnWidget->HideMarker();
+	}
+
+	// HP 바 숨기기 — 사망한 적 위에 HP 바가 남지 않도록 명시적으로 숨긴다.
+	if (IsValid(HealthBarWidget))
+	{
+		HealthBarWidget->HideBar();
 	}
 
 	// 사망 시 Targeting 콜리전 비활성화 — 죽은 적이 재탐색 후보에 포함되지 않도록.

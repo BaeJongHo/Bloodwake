@@ -15,6 +15,7 @@ class UBWCombatComponent;
 class UBWAttackComponent;
 class UBWTargetingCollisionComponent;
 class UBWLockOnWidgetComponent;
+class UBWEnemyHealthBarComponent;
 class UAnimMontage;
 class UParticleSystem;
 class USoundBase;
@@ -81,6 +82,20 @@ public:
 	 */
 	void AbortCurrentAttack();
 
+	// ── HP 바 표시/숨김 API (ABWEnemyAIController가 호출) ──────────────────────
+
+	/**
+	 * 머리 위 HP 바를 표시한다.
+	 * ABWEnemyAIController::UpdateTarget에서 플레이어를 감지하면 호출한다.
+	 */
+	void ShowHealthBar();
+
+	/**
+	 * 머리 위 HP 바를 숨긴다.
+	 * ABWEnemyAIController::UpdateTarget에서 감지 종료 시, 또는 사망 시 호출한다.
+	 */
+	void HideHealthBar();
+
 	// ── IBWCombatInterface 구현 ─────────────────────────────────────────────
 
 	/**
@@ -141,6 +156,14 @@ protected:
 	 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat|LockOn")
 	TObjectPtr<UBWLockOnWidgetComponent> LockOnWidget;
+
+	/**
+	 * Screen-space 머리 위 HP 바 위젯 컴포넌트.
+	 * 평소 숨김, 플레이어 감지 시 ShowBar(), 감지 종료/사망 시 HideBar().
+	 * Widget Class(WBP_EnemyHealthBar)는 BP 자식(BP_BWEnemy)의 "(상속됨)" 컴포넌트에서 지정한다.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UI")
+	TObjectPtr<UBWEnemyHealthBarComponent> HealthBarWidget;
 
 	// ── BP 설정용 — 무기 / 공격 데이터 ──────────────────────────────────
 
