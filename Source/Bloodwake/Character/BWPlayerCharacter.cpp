@@ -777,7 +777,7 @@ EBWHitDirection ABWPlayerCharacter::ComputeHitDirection(const FVector& ShotDirec
 	}
 
 	// 피격자 → 공격자 방향 (수평 평면 투영)
-	FVector FromAttacker = -ShotDirection;
+	FVector FromAttacker = ShotDirection;
 	FromAttacker.Z = 0.f;
 	if (!FromAttacker.Normalize())
 	{
