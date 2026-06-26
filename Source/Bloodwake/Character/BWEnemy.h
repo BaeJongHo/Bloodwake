@@ -82,6 +82,14 @@ public:
 	 */
 	void AbortCurrentAttack();
 
+	/**
+	 * 현재 공격 몽타주가 재생 중인지 여부.
+	 * PerformAttack에서 ActiveAttackMontage를 설정하고 종료/중단 시 AbortCurrentAttack이 비우므로,
+	 * 이 값이 곧 "공격 진행 중" 신호다.
+	 * UBWBTService_SelectBehavior가 공격 중 행동 전환(모션 캔슬)을 막는 데 사용한다.
+	 */
+	bool IsAttacking() const { return ActiveAttackMontage != nullptr; }
+
 	// ── HP 바 표시/숨김 API (ABWEnemyAIController가 호출) ──────────────────────
 
 	/**

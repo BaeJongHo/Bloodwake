@@ -15,6 +15,11 @@ UBWBTService_SelectBehavior::UBWBTService_SelectBehavior()
 	// TickNode 호출이 보장되도록 명시한다.
 	bNotifyTick = true;
 
+	// BT가 재탐색을 시작할 때(예: 공격 태스크 완료 후) 데코레이터 평가 전에 한 번 더 틱한다.
+	// 공격 종료 직후 Behavior 키를 즉시 갱신해, 사거리 밖인데 MeleeAttack 브랜치로
+	// 재진입하는(스테일 키로 인한 헛공격 반복) 문제를 막는다.
+	bCallTickOnSearchStart = true;
+
 	// 기본 평가 주기(초). BT 에디터 노드 디테일에서 인스턴스별 조정 가능.
 	Interval = 0.2f;
 	RandomDeviation = 0.05f;
@@ -59,6 +64,17 @@ void UBWBTService_SelectBehavior::UpdateBehavior(UBehaviorTreeComponent& OwnerCo
 	UBlackboardComponent* BB = OwnerComp.GetBlackboardComponent();
 	if (!IsValid(BB))
 	{
+		return;
+	}
+
+	// ── 공격 중 행동 고정(hold) ───────────────────────────────────────────────
+	// 공격 모션 재생 중에는 사거리 밖으로 벗어나도 Behavior를 바꾸지 않는다.
+	// MeleeAttack을 유지해 데코레이터가 진행 중인 PerformAttack 태스크를 Abort(모션 캔슬)하지
+	// 않도록 한다. 공격이 끝나면(IsAttacking == false) 아래 일반 로직으로 재평가되어 Approach로 전환된다.
+	// (공격 종료 후 재진입 방지는 생성자의 bCallTickOnSearchStart가 담당.)
+	if (Enemy->IsAttacking())
+	{
+		SetBehaviorKey(BB, EBWAIBehavior::MeleeAttack);
 		return;
 	}
 
