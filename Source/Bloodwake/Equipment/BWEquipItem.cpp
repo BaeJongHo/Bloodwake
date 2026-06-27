@@ -58,6 +58,12 @@ USceneComponent* ABWEquipItem::GetAttachMeshComponent() const
 	return MeshComponent;
 }
 
+USkeletalMesh* ABWEquipItem::GetDisplaySkeletalMesh() const
+{
+	// 베이스(무기·방패)는 스켈레탈 메시 외형이 없다. 파생(ABWArmour)이 오버라이드한다.
+	return nullptr;
+}
+
 void ABWEquipItem::SetEquippedPhysicsState()
 {
 	if (!MeshComponent)

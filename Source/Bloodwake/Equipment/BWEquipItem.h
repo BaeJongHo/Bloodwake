@@ -9,6 +9,7 @@
 class UStaticMeshComponent;
 class UStaticMesh;
 class USkeletalMeshComponent;
+class USkeletalMesh;
 
 /**
  * 장비가 장착될 슬롯 식별자.
@@ -86,6 +87,16 @@ public:
 	 */
 	UFUNCTION(BlueprintPure, Category = "Equipment")
 	UStaticMesh* GetDisplayStaticMesh() const;
+
+	/**
+	 * 픽업 미리보기용 스켈레탈 메시를 반환한다.
+	 * 베이스(무기·방패)는 스켈레탈 메시 외형이 없으므로 nullptr을 반환한다.
+	 * ABWArmour는 ArmourMesh의 스켈레탈 메시 에셋을 반환하도록 오버라이드한다.
+	 * ABWPickUpItem이 CDO에서 호출해 StaticMesh/SkeletalMesh 중 어느 것을 표시할지 결정한다.
+	 * CDO에서도 안전하게 호출 가능하다.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Equipment")
+	virtual USkeletalMesh* GetDisplaySkeletalMesh() const;
 
 protected:
 	/** 장비 외형 메시. BP 자식의 디테일 패널에서 SM_ 에셋을 지정한다. */

@@ -29,6 +29,13 @@ USceneComponent* ABWArmour::GetAttachMeshComponent() const
 	return ArmourMesh;
 }
 
+USkeletalMesh* ABWArmour::GetDisplaySkeletalMesh() const
+{
+	// 픽업 미리보기는 ArmourMesh의 스켈레탈 메시 에셋을 표시한다.
+	// CDO에서 호출 시에도 BP 자식이 (상속됨) ArmourMesh에 지정한 SK_ 에셋을 읽는다.
+	return ArmourMesh ? ArmourMesh->GetSkeletalMeshAsset() : nullptr;
+}
+
 // ── 장착 / 해제 ─────────────────────────────────────────────────────────────
 
 void ABWArmour::EquipItem(USkeletalMeshComponent* OwnerMesh, UBWAttributeComponent* Attribute)

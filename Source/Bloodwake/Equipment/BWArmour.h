@@ -59,6 +59,12 @@ public:
 	 */
 	virtual USceneComponent* GetAttachMeshComponent() const override;
 
+	/**
+	 * 픽업 미리보기용 스켈레탈 메시로 ArmourMesh의 에셋을 반환한다.
+	 * ABWPickUpItem이 CDO에서 호출해 방어구 외형을 미리보기에 표시한다.
+	 */
+	virtual USkeletalMesh* GetDisplaySkeletalMesh() const override;
+
 	// ── 방어구 데이터 접근자 ────────────────────────────────────────
 
 	/** 방어구 부위를 반환한다. CombatComponent의 TMap 키 및 신체 메시 라우팅에 사용. */

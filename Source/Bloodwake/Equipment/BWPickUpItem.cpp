@@ -4,6 +4,7 @@
 
 #include "Components/SphereComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Equipment/BWEquipItem.h"
 
 ABWPickUpItem::ABWPickUpItem()
@@ -24,12 +25,21 @@ ABWPickUpItem::ABWPickUpItem()
 
 	// 캐릭터 이동을 막지 않도록 Pawn 채널은 Ignore로 유지(기본값).
 
-	// 픽업 표식 메시. EquipItemClass CDO 메시가 자동 적용된다.
+	// 픽업 표식 메시(StaticMesh 장비 — 무기·방패). EquipItemClass CDO 메시가 자동 적용된다.
 	DisplayMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("DisplayMesh"));
 	DisplayMesh->SetupAttachment(CollisionSphere);
 	// 표식 메시는 물리/콜리전 없음 — 시각 표시 전용.
 	DisplayMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	DisplayMesh->SetSimulatePhysics(false);
+
+	// 픽업 표식 메시(SkeletalMesh 장비 — 방어구). 애님 인스턴스 없이 레퍼런스 포즈로만 표시.
+	DisplaySkeletalMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("DisplaySkeletalMesh"));
+	DisplaySkeletalMesh->SetupAttachment(CollisionSphere);
+	DisplaySkeletalMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	DisplaySkeletalMesh->SetSimulatePhysics(false);
+	// 미리보기 표식은 애니메이션이 필요 없다 — 틱·애님 갱신 비용 제거.
+	DisplaySkeletalMesh->SetComponentTickEnabled(false);
+	DisplaySkeletalMesh->bNoSkeletonUpdate = true;
 }
 
 void ABWPickUpItem::OnConstruction(const FTransform& Transform)
@@ -63,15 +73,10 @@ void ABWPickUpItem::Consume()
 
 void ABWPickUpItem::ApplyDisplayMeshFromClass()
 {
-	if (!DisplayMesh)
-	{
-		return;
-	}
-
-	// EquipItemClass가 null이면 빈 메시로 폴백한다.
+	// EquipItemClass가 null이면 양쪽 미리보기를 비운다.
 	if (!EquipItemClass)
 	{
-		DisplayMesh->SetStaticMesh(nullptr);
+		ClearDisplayMeshes();
 		return;
 	}
 
@@ -79,10 +84,51 @@ void ABWPickUpItem::ApplyDisplayMeshFromClass()
 	const ABWEquipItem* CDO = EquipItemClass.GetDefaultObject();
 	if (!CDO)
 	{
-		DisplayMesh->SetStaticMesh(nullptr);
+		ClearDisplayMeshes();
 		return;
 	}
 
-	UStaticMesh* Mesh = CDO->GetDisplayStaticMesh();
-	DisplayMesh->SetStaticMesh(Mesh); // Mesh가 nullptr이어도 SetStaticMesh(nullptr)로 안전 폴백됨.
+	// 스켈레탈 메시(방어구) 우선 — 있으면 그쪽을 표시하고 StaticMesh 미리보기는 숨긴다.
+	USkeletalMesh* SkeletalMesh = CDO->GetDisplaySkeletalMesh();
+	if (SkeletalMesh)
+	{
+		if (DisplaySkeletalMesh)
+		{
+			DisplaySkeletalMesh->SetSkeletalMeshAsset(SkeletalMesh);
+			DisplaySkeletalMesh->SetVisibility(true);
+		}
+		if (DisplayMesh)
+		{
+			DisplayMesh->SetStaticMesh(nullptr);
+			DisplayMesh->SetVisibility(false);
+		}
+		return;
+	}
+
+	// 스켈레탈 메시가 없으면 StaticMesh(무기·방패)를 표시하고 스켈레탈 미리보기는 숨긴다.
+	if (DisplayMesh)
+	{
+		// Mesh가 nullptr이어도 SetStaticMesh(nullptr)로 안전 폴백됨.
+		DisplayMesh->SetStaticMesh(CDO->GetDisplayStaticMesh());
+		DisplayMesh->SetVisibility(true);
+	}
+	if (DisplaySkeletalMesh)
+	{
+		DisplaySkeletalMesh->SetSkeletalMeshAsset(nullptr);
+		DisplaySkeletalMesh->SetVisibility(false);
+	}
+}
+
+void ABWPickUpItem::ClearDisplayMeshes()
+{
+	if (DisplayMesh)
+	{
+		DisplayMesh->SetStaticMesh(nullptr);
+		DisplayMesh->SetVisibility(false);
+	}
+	if (DisplaySkeletalMesh)
+	{
+		DisplaySkeletalMesh->SetSkeletalMeshAsset(nullptr);
+		DisplaySkeletalMesh->SetVisibility(false);
+	}
 }

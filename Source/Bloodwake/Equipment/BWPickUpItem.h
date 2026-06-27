@@ -8,6 +8,7 @@
 
 class USphereComponent;
 class UStaticMeshComponent;
+class USkeletalMeshComponent;
 class ABWEquipItem;
 
 /**
@@ -58,9 +59,19 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "PickUp")
 	TObjectPtr<USphereComponent> CollisionSphere;
 
-	/** 픽업 표식 메시(빛기둥·아이템 표식 등). EquipItemClass CDO의 메시가 자동 적용된다. */
+	/**
+	 * 스태틱 메시 외형 장비(무기·방패) 미리보기. EquipItemClass CDO의 StaticMesh가 자동 적용된다.
+	 * 방어구처럼 스켈레탈 메시 외형인 경우에는 숨겨지고 DisplaySkeletalMesh가 대신 표시된다.
+	 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "PickUp")
 	TObjectPtr<UStaticMeshComponent> DisplayMesh;
+
+	/**
+	 * 스켈레탈 메시 외형 장비(방어구) 미리보기. EquipItemClass CDO의 스켈레탈 메시가 자동 적용된다.
+	 * 애님 인스턴스 없이 레퍼런스 포즈로만 표시되며(시각 표식 전용), StaticMesh 장비일 때는 숨겨진다.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "PickUp")
+	TObjectPtr<USkeletalMeshComponent> DisplaySkeletalMesh;
 
 	/**
 	 * 이 픽업이 줄 장비 클래스. 레벨 배치 인스턴스마다 다른 장비를 지정할 수 있다.
@@ -72,9 +83,13 @@ protected:
 
 private:
 	/**
-	 * EquipItemClass의 CDO에서 StaticMesh를 읽어 DisplayMesh에 적용한다.
-	 * EquipItemClass가 null이거나 CDO 메시가 null이면 DisplayMesh->SetStaticMesh(nullptr)로 폴백한다.
+	 * EquipItemClass의 CDO에서 외형 메시를 읽어 미리보기에 적용한다.
+	 * CDO에 스켈레탈 메시(방어구)가 있으면 DisplaySkeletalMesh를, 없으면 DisplayMesh(StaticMesh)를 표시하고
+	 * 다른 한쪽은 비워서 숨긴다. EquipItemClass/CDO/메시가 null이면 양쪽 모두 빈 상태로 폴백한다.
 	 * OnConstruction / BeginPlay / InitializeFromEquip이 공통 호출한다.
 	 */
 	void ApplyDisplayMeshFromClass();
+
+	/** 미리보기 메시를 모두 비우고 숨긴다(폴백 공통 처리). */
+	void ClearDisplayMeshes();
 };
