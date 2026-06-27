@@ -53,6 +53,11 @@ UStaticMesh* ABWEquipItem::GetDisplayStaticMesh() const
 	return MeshComponent->GetStaticMesh();
 }
 
+USceneComponent* ABWEquipItem::GetAttachMeshComponent() const
+{
+	return MeshComponent;
+}
+
 void ABWEquipItem::SetEquippedPhysicsState()
 {
 	if (!MeshComponent)

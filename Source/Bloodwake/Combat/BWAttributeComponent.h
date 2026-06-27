@@ -62,6 +62,36 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Attributes|Health")
 	void ApplyDamage(float Amount);
 
+	// ── 방어력 API ──────────────────────────────────────────────────
+
+	/**
+	 * 방어력을 Amount만큼 증가시킨다(방어구 장착 시 호출).
+	 * 음수 값은 무시한다.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Attributes|Defense")
+	void IncreaseDefense(float Amount);
+
+	/**
+	 * 방어력을 Amount만큼 감소시킨다(방어구 해제 시 호출).
+	 * 0 미만으로 내려가지 않도록 클램프한다.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Attributes|Defense")
+	void DecreaseDefense(float Amount);
+
+	/** 현재 방어력 합산값을 반환한다. */
+	UFUNCTION(BlueprintPure, Category = "Attributes|Defense")
+	float GetDefenseStat() const { return DefenseStat; }
+
+	/**
+	 * 방어력을 반영한 최종 데미지를 계산해 반환한다(데미지는 실제로 차감하지 않음 — 순수 계산).
+	 * 공식: FinalDamage = RawDamage * (DefenseScale / (DefenseScale + DefenseStat)).
+	 * TakeDamage 경로에서 ApplyDamage 호출 전에 사용한다.
+	 * DefenseStat <= 0 이면 RawDamage를 그대로 반환(방어력 없을 때 패널티 없음).
+	 * 분모 0-division 가드 포함.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Attributes|Defense")
+	float CalculateMitigatedDamage(float RawDamage) const;
+
 	// ── 조회 헬퍼(BlueprintPure) ─────────────────────────────────────
 
 	UFUNCTION(BlueprintPure, Category = "Attributes|Health")
@@ -123,6 +153,20 @@ public:
 	/** 체력이 0에 도달했을 때 1회 브로드캐스트. 구독자는 AddDynamic으로 등록한다. */
 	UPROPERTY(BlueprintAssignable, Category = "Attributes|Health")
 	FBWOnDeath OnDeath;
+
+	// ── 방어력 상태 ─────────────────────────────────────────────────
+
+	/** 모든 장착 방어구의 방어력 합. 데미지 감산 공식 입력값. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Attributes|Defense")
+	float DefenseStat = 0.f;
+
+	/**
+	 * 방어 공식 스케일 상수. 클수록 방어력 효율 하락.
+	 * 기본 100 — 방어력 100일 때 데미지 50% 감소.
+	 * BP 자식에서 튜닝한다.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Attributes|Defense", meta = (ClampMin = "1.0"))
+	float DefenseScale = 100.f;
 
 	// ── 튜닝 데이터 (BP 자식에서 설정) ─────────────────────────────
 

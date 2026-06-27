@@ -10,11 +10,14 @@
 #include "Engine/DataTable.h"
 #include "Equipment/BWEquipItem.h"
 #include "Equipment/BWWeapon.h"
+#include "Equipment/BWArmour.h"
 #include "Equipment/BWPickUpItem.h"
 #include "Character/BWStateComponent.h"
+#include "Character/BWPlayerCharacter.h"
 #include "Combat/BWAttackComponent.h"
 #include "Combat/BWAttackTypes.h"
 #include "Combat/BWWeaponCollisionComponent.h"
+#include "Combat/BWAttributeComponent.h"
 #include "Core/BWGameplayDefine.h"
 
 UBWCombatComponent::UBWCombatComponent()
@@ -32,13 +35,14 @@ void UBWCombatComponent::BeginPlay()
 {
 	Super::BeginPlay();
 
-	// 소유 캐릭터의 메시, StateComponent, AttackComponent, ACharacter를 1회 캐시한다.
+	// 소유 캐릭터의 메시, StateComponent, AttackComponent, ACharacter, AttributeComponent를 1회 캐시한다.
 	if (ACharacter* OwnerCharacter = Cast<ACharacter>(GetOwner()))
 	{
 		CachedOwnerCharacter = OwnerCharacter;
 		CachedOwnerMesh = OwnerCharacter->GetMesh();
 		CachedStateComponent = OwnerCharacter->FindComponentByClass<UBWStateComponent>();
 		CachedAttackComponent = OwnerCharacter->FindComponentByClass<UBWAttackComponent>();
+		CachedAttributeComponent = OwnerCharacter->FindComponentByClass<UBWAttributeComponent>();
 	}
 	else
 	{
@@ -108,6 +112,13 @@ bool UBWCombatComponent::EquipNewItem(TSubclassOf<ABWEquipItem> InEquipItemClass
 			TEXT("[BWCombatComponent] EquipNewItem: 슬롯이 None입니다. ABWEquipItem 베이스 또는 미설정 파생 클래스는 직접 장착할 수 없습니다. (%s)"),
 			*InEquipItemClass->GetName());
 		return false;
+	}
+
+	// Armour 슬롯은 별도 경로(TMap 관리)로 처리한다 — Weapon/Shield 단일 참조 패턴과 다름.
+	if (Slot == EBWEquipSlot::Armour)
+	{
+		EquipArmourItem(InEquipItemClass, DropTransform);
+		return true;
 	}
 
 	// 3. 해당 슬롯에 기존 장비가 있으면 드롭 후 슬롯 초기화.
@@ -647,6 +658,118 @@ bool UBWCombatComponent::IsEquipActionInProgress() const
 
 	return CachedStateComponent->HasStateTag(BWGameplayTags::Character_Action_Equip.GetTag())
 		|| CachedStateComponent->HasStateTag(BWGameplayTags::Character_Action_Unequip.GetTag());
+}
+
+// ── 방어구 슬롯 ──────────────────────────────────────────────────────────────
+
+ABWArmour* UBWCombatComponent::GetEquippedArmour(EBWArmourType Type) const
+{
+	const TObjectPtr<ABWArmour>* Found = EquippedArmours.Find(Type);
+	if (!Found)
+	{
+		return nullptr;
+	}
+	return Found->Get();
+}
+
+void UBWCombatComponent::EquipArmourItem(TSubclassOf<ABWEquipItem> EquipItemClass, const FTransform& DropTransform)
+{
+	// 1. CDO에서 ArmourType 확인 (Cast로 방어구 여부 검증)
+	const ABWArmour* ArmourCDO = Cast<ABWArmour>(EquipItemClass.GetDefaultObject());
+	if (!ArmourCDO)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[BWCombatComponent] EquipArmourItem: 클래스(%s)가 ABWArmour가 아닙니다."),
+			*EquipItemClass->GetName());
+		return;
+	}
+
+	const EBWArmourType ArmourType = ArmourCDO->GetArmourType();
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	// 2. 새 방어구 스폰
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.Owner = GetOwner();
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	const FTransform SpawnTransform = GetOwner()
+		? GetOwner()->GetActorTransform()
+		: FTransform::Identity;
+
+	ABWArmour* NewArmour = World->SpawnActor<ABWArmour>(EquipItemClass, SpawnTransform, SpawnParams);
+	if (!IsValid(NewArmour))
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[BWCombatComponent] EquipArmourItem: 새 방어구(%s) 스폰에 실패했습니다."),
+			*EquipItemClass->GetName());
+		return;
+	}
+
+	// 스폰 직후 콜리전·물리를 비활성화한다.
+	NewArmour->SetEquippedPhysicsState();
+
+	// 3. 같은 부위에 기존 방어구가 있으면 해제 + 드롭 후 맵 제거
+	//    순서: UnequipItem(DecreaseDefense) → 맵 제거 → DropEquipItem(Destroy)
+	if (TObjectPtr<ABWArmour>* ExistingPtr = EquippedArmours.Find(ArmourType))
+	{
+		ABWArmour* ExistingArmour = ExistingPtr->Get();
+		if (IsValid(ExistingArmour))
+		{
+			UE_LOG(LogTemp, Log,
+				TEXT("[BWCombatComponent] EquipArmourItem: 기존 방어구(%s) 해제 후 드롭합니다."),
+				*ExistingArmour->GetName());
+
+			// LeaderPose 해제 + DecreaseDefense — Destroy 전에 반드시 호출
+			UBWAttributeComponent* AttrComp = CachedAttributeComponent.IsValid()
+				? CachedAttributeComponent.Get() : nullptr;
+			ExistingArmour->UnequipItem(AttrComp);
+
+			// 신체 메시 복원 — UnequipItem 직후, 맵 제거 전에 호출한다.
+			// 이후 신규 장착 경로에서 SetBodyPartHidden(ArmourType, true)가 다시 호출되므로 최종 상태는 올바르다.
+			SetBodyPartHidden(ArmourType, false);
+
+			// 맵에서 제거
+			EquippedArmours.Remove(ArmourType);
+
+			// 드롭 픽업 생성 후 기존 방어구 Destroy
+			DropEquipItem(ExistingArmour, DropTransform);
+		}
+		else
+		{
+			EquippedArmours.Remove(ArmourType);
+		}
+	}
+
+	// 4. 새 방어구 장착: 플레이어 메시에 부착 + LeaderPose + IncreaseDefense
+	USkeletalMeshComponent* OwnerMesh = GetOwnerMesh();
+	UBWAttributeComponent* Attribute = CachedAttributeComponent.IsValid()
+		? CachedAttributeComponent.Get() : nullptr;
+
+	NewArmour->EquipItem(OwnerMesh, Attribute);
+
+	// 5. 맵에 등록
+	EquippedArmours.Add(ArmourType, NewArmour);
+
+	// 6. 대응 기본 신체 메시 숨김 (Chest/Pants/Boots만; Gloves는 내부에서 무시)
+	SetBodyPartHidden(ArmourType, true);
+
+	UE_LOG(LogTemp, Log,
+		TEXT("[BWCombatComponent] EquipArmourItem: %s 장착 완료 (부위=%d)"),
+		*NewArmour->GetName(), static_cast<int32>(ArmourType));
+}
+
+void UBWCombatComponent::SetBodyPartHidden(EBWArmourType Type, bool bHideBodyPart)
+{
+	// 플레이어 캐릭터에 위임. Cast 실패(적/보스)는 조용히 무시 — 신체 파츠가 없어도 안전.
+	if (ABWPlayerCharacter* PlayerCharacter = Cast<ABWPlayerCharacter>(GetOwner()))
+	{
+		PlayerCharacter->SetBodyArmourHidden(Type, bHideBodyPart);
+	}
 }
 
 void UBWCombatComponent::RefreshCombatState()

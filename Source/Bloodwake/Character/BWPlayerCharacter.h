@@ -8,6 +8,8 @@
 #include "Combat/BWCombatTypes.h"
 #include "BWPlayerCharacter.generated.h"
 
+enum class EBWArmourType : uint8;
+
 class USpringArmComponent;
 class UCameraComponent;
 class UInputMappingContext;
@@ -18,6 +20,7 @@ class UBWStateComponent;
 class UBWCombatComponent;
 class UBWAttackComponent;
 class UBWTargetingComponent;
+class USkeletalMeshComponent;
 class UAnimMontage;
 class UParticleSystem;
 class USoundBase;
@@ -68,6 +71,19 @@ public:
 	/** AttributeComponent 접근자. GameMode 등 외부에서 FindComponentByClass 우회 없이 접근하기 위해 제공. */
 	UFUNCTION(BlueprintPure, Category = "Attributes")
 	UBWAttributeComponent* GetAttributeComponent() const { return AttributeComponent; }
+
+	/**
+	 * 방어구 부위에 대응하는 기본 신체 메시의 가시성을 토글한다.
+	 * UBWCombatComponent가 방어구 장착/해제 시 호출한다.
+	 *  - Chest   → TorsoMesh
+	 *  - Pants   → LegsMesh
+	 *  - Boots   → FeetMesh
+	 *  - Gloves  → 대응 메시 없음, 무시(크래시 방지)
+	 * bHidden=true: 메시를 숨긴다(방어구가 그 부위를 가림).
+	 * bHidden=false: 메시를 표시한다(방어구 해제 후 기본 신체 복원).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Body")
+	void SetBodyArmourHidden(EBWArmourType Type, bool bHideBodyPart);
 
 	/**
 	 * 회피(Roll) 종료 처리. 회피 몽타주에 배치한 AnimNotify(AnimInstance의 AnimNotify_RollEnd)가 호출한다.
@@ -238,6 +254,30 @@ protected:
 	bool CanSprint() const;
 
 protected:
+	// ── 기본 신체 메시 (방어구 장착 시 숨김/복원 대상) ─────────────
+
+	/**
+	 * 상체(Torso) 기본 신체 메시. Chest 방어구 장착 시 SetVisibility(false)로 숨긴다.
+	 * 메인 메시와 같은 스켈레톤을 공유해야 LeaderPose가 올바르게 작동한다.
+	 * BP 자식의 (상속됨) TorsoMesh 컴포넌트에서 SK_ 에셋을 지정한다(새 컴포넌트 추가 금지).
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Body")
+	TObjectPtr<USkeletalMeshComponent> TorsoMesh;
+
+	/**
+	 * 하체(Legs/Pants) 기본 신체 메시. Pants 방어구 장착 시 숨긴다.
+	 * BP 자식의 (상속됨) LegsMesh 컴포넌트에서 SK_ 에셋을 지정한다.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Body")
+	TObjectPtr<USkeletalMeshComponent> LegsMesh;
+
+	/**
+	 * 발(Feet/Boots) 기본 신체 메시. Boots 방어구 장착 시 숨긴다.
+	 * BP 자식의 (상속됨) FeetMesh 컴포넌트에서 SK_ 에셋을 지정한다.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Body")
+	TObjectPtr<USkeletalMeshComponent> FeetMesh;
+
 	// ── 카메라 ──────────────────────────────────────────────────────
 
 	/** 캐릭터와 카메라 사이 거리를 두고 충돌을 보정하는 카메라 붐. */

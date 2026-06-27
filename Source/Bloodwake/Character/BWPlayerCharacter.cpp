@@ -24,6 +24,7 @@
 #include "Core/BWGameplayDefine.h"
 #include "Equipment/BWPickUpItem.h"
 #include "Equipment/BWEquipItem.h"
+#include "Equipment/BWArmour.h"
 #include "DrawDebugHelpers.h"
 
 ABWPlayerCharacter::ABWPlayerCharacter()
@@ -70,6 +71,26 @@ ABWPlayerCharacter::ABWPlayerCharacter()
 
 	// TargetingComponent 생성·부착. 락온 타겟팅 로직을 담당한다. Tick은 기본 비활성.
 	TargetingComponent = CreateDefaultSubobject<UBWTargetingComponent>(TEXT("TargetingComponent"));
+
+	// ── 기본 신체 메시 생성 ─────────────────────────────────────────
+	// 방어구 장착 시 숨기고, 해제 시 다시 표시하는 부위별 신체 파츠.
+	// LeaderPose는 BeginPlay에서 안전하게 재설정한다(생성자 시점엔 월드/플레이어 참조 불안정).
+	// BP 자식의 (상속됨) 컴포넌트에서 SK_ 에셋을 지정해야 한다(새 컴포넌트 추가 금지).
+
+	TorsoMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("TorsoMesh"));
+	TorsoMesh->SetupAttachment(GetMesh());
+	TorsoMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	TorsoMesh->SetSimulatePhysics(false);
+
+	LegsMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("LegsMesh"));
+	LegsMesh->SetupAttachment(GetMesh());
+	LegsMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	LegsMesh->SetSimulatePhysics(false);
+
+	FeetMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("FeetMesh"));
+	FeetMesh->SetupAttachment(GetMesh());
+	FeetMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	FeetMesh->SetSimulatePhysics(false);
 }
 
 void ABWPlayerCharacter::BeginPlay()
@@ -82,6 +103,25 @@ void ABWPlayerCharacter::BeginPlay()
 		AttributeComponent->OnStaminaDepleted.AddDynamic(this, &ABWPlayerCharacter::HandleStaminaDepleted);
 		AttributeComponent->OnStaminaChanged.AddDynamic(this, &ABWPlayerCharacter::HandleStaminaChanged);
 		AttributeComponent->OnDeath.AddDynamic(this, &ABWPlayerCharacter::HandleDeath);
+	}
+
+	// 신체 메시 LeaderPose 재설정.
+	// 생성자에서 attach 후 BeginPlay에서 다시 설정해 에디터 리로드/PIE 전환 안정성을 높인다.
+	// 메인 메시와 같은 스켈레톤을 공유하는 SK_ 에셋이 지정되어 있어야 본 추종이 올바르게 작동한다.
+	if (USkeletalMeshComponent* MainMesh = GetMesh())
+	{
+		if (TorsoMesh)
+		{
+			TorsoMesh->SetLeaderPoseComponent(MainMesh);
+		}
+		if (LegsMesh)
+		{
+			LegsMesh->SetLeaderPoseComponent(MainMesh);
+		}
+		if (FeetMesh)
+		{
+			FeetMesh->SetLeaderPoseComponent(MainMesh);
+		}
 	}
 }
 
@@ -194,6 +234,40 @@ void ABWPlayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputC
 	}
 }
 
+// ── 신체 메시 가시성 제어 ────────────────────────────────────────────────────
+
+void ABWPlayerCharacter::SetBodyArmourHidden(EBWArmourType Type, bool bHideBodyPart)
+{
+	switch (Type)
+	{
+	case EBWArmourType::Chest:
+		if (TorsoMesh)
+		{
+			TorsoMesh->SetVisibility(!bHideBodyPart);
+		}
+		break;
+
+	case EBWArmourType::Pants:
+		if (LegsMesh)
+		{
+			LegsMesh->SetVisibility(!bHideBodyPart);
+		}
+		break;
+
+	case EBWArmourType::Boots:
+		if (FeetMesh)
+		{
+			FeetMesh->SetVisibility(!bHideBodyPart);
+		}
+		break;
+
+	case EBWArmourType::Gloves:
+	default:
+		// Gloves는 대응 기본 신체 메시가 없다 — 크래시 없이 무시.
+		break;
+	}
+}
+
 // ── IBWCombatInterface 구현 ───────────────────────────────────────────────────
 
 void ABWPlayerCharacter::PerformAttack(FOnMontageEnded OnEnded)
@@ -235,10 +309,12 @@ float ABWPlayerCharacter::TakeDamage(float DamageAmount, const FDamageEvent& Dam
 		}
 	}
 
-	// 데미지를 AttributeComponent에 위임 (체력 0 도달 시 OnDeath 델리게이트 브로드캐스트 → HandleDeath)
+	// 방어 공식 적용: 방어력을 반영한 최종 데미지를 계산한 후 AttributeComponent에 위임.
+	// DefenseStat = 0이면 CalculateMitigatedDamage가 ActualDamage를 그대로 반환한다(방어력 없을 때 패널티 없음).
 	if (AttributeComponent)
 	{
-		AttributeComponent->ApplyDamage(ActualDamage);
+		const float MitigatedDamage = AttributeComponent->CalculateMitigatedDamage(ActualDamage);
+		AttributeComponent->ApplyDamage(MitigatedDamage);
 	}
 
 	// 피격 이펙트·리액션 재생 (사망은 OnDeath 델리게이트가 별도 트리거)

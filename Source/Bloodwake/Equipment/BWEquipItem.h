@@ -8,6 +8,7 @@
 
 class UStaticMeshComponent;
 class UStaticMesh;
+class USkeletalMeshComponent;
 
 /**
  * 장비가 장착될 슬롯 식별자.
@@ -20,6 +21,7 @@ enum class EBWEquipSlot : uint8
     None   UMETA(DisplayName = "None"),
     Weapon UMETA(DisplayName = "Weapon"),
     Shield UMETA(DisplayName = "Shield"),
+    Armour UMETA(DisplayName = "Armour"),
 };
 
 /**
@@ -64,10 +66,18 @@ public:
 
 	/**
 	 * 이 장비가 속하는 슬롯을 반환한다.
-	 * 베이스는 None을 반환. ABWWeapon은 Weapon, ABWShield는 Shield를 반환한다.
+	 * 베이스는 None을 반환. ABWWeapon은 Weapon, ABWShield는 Shield, ABWArmour는 Armour를 반환한다.
 	 * CombatComponent가 슬롯 라우팅에 사용한다.
 	 */
 	virtual EBWEquipSlot GetEquipSlot() const { return EBWEquipSlot::None; }
+
+	/**
+	 * 부착 대상 컴포넌트를 반환한다.
+	 * 베이스는 루트 MeshComponent(StaticMesh)를 반환한다.
+	 * ABWArmour는 ArmourMesh(SkeletalMesh)를 반환하도록 오버라이드한다.
+	 * CombatComponent / AttachToCharacter가 부착 일관성을 위해 사용한다.
+	 */
+	virtual USceneComponent* GetAttachMeshComponent() const;
 
 	/**
 	 * MeshComponent의 StaticMesh를 반환한다.

@@ -10,14 +10,17 @@
 
 class ABWEquipItem;
 class ABWWeapon;
+class ABWArmour;
 class ABWPickUpItem;
 class USkeletalMeshComponent;
 class UBWStateComponent;
 class UBWAttackComponent;
 class UBWWeaponCollisionComponent;
+class UBWAttributeComponent;
 class UAnimMontage;
 class UDataTable;
 class ACharacter;
+enum class EBWArmourType : uint8;
 
 /**
  * 소유 캐릭터의 장비 인스턴스 보유 및 장착/해제/뽑기/넣기 로직을 담당하는 컴포넌트.
@@ -90,6 +93,13 @@ public:
 	/** 현재 보유 중인 방패 인스턴스를 반환한다. 없으면 nullptr. */
 	UFUNCTION(BlueprintPure, Category = "Combat|Equipment")
 	ABWEquipItem* GetEquippedShield() const { return EquippedShield; }
+
+	/**
+	 * 지정 부위에 장착된 방어구 인스턴스를 반환한다. 없으면 nullptr.
+	 * BP에서 방어구 정보 조회에 사용한다.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Combat|Armour")
+	ABWArmour* GetEquippedArmour(EBWArmourType Type) const;
 
 	/**
 	 * 노티파이(UBWAnimNotify_AttachEquip)가 호출하는 부착 진입점.
@@ -252,12 +262,44 @@ protected:
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Combat|Equipment")
 	bool bShieldDrawn = false;
 
+	/**
+	 * 부위별 장착 방어구 맵. GC 추적을 위해 TObjectPtr 값 + UPROPERTY.
+	 * key = EBWArmourType, value = 해당 부위에 장착된 ABWArmour 인스턴스.
+	 */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Combat|Armour")
+	TMap<EBWArmourType, TObjectPtr<ABWArmour>> EquippedArmours;
+
 private:
 	/**
 	 * 소유 캐릭터의 스켈레탈 메시 컴포넌트를 반환한다.
 	 * BeginPlay에서 1회 캐시한다.
 	 */
 	USkeletalMeshComponent* GetOwnerMesh() const;
+
+	/**
+	 * 방어구 슬롯 전용 장착 분기.
+	 * EquipNewItem에서 Armour 슬롯이 감지되면 이 함수로 라우팅된다.
+	 * 같은 부위에 기존 방어구가 있으면 UnequipItem + DropEquipItem 후 교체한다.
+	 *
+	 * 처리 순서:
+	 *  1. Cast<ABWArmour> 검증.
+	 *  2. 새 방어구 스폰.
+	 *  3. 기존 방어구(같은 부위)가 있으면 UnequipItem → DropEquipItem → 맵 제거.
+	 *  4. 새 방어구 EquipItem(OwnerMesh, CachedAttributeComponent).
+	 *  5. EquippedArmours.Add(Type, NewArmour).
+	 *  6. SetBodyPartHidden(Type, true).
+	 */
+	void EquipArmourItem(TSubclassOf<ABWEquipItem> EquipItemClass, const FTransform& DropTransform);
+
+	/**
+	 * 부위에 대응하는 기본 신체 메시 가시성을 토글한다.
+	 * 플레이어 캐릭터(ABWPlayerCharacter)에 위임한다 — Cast 실패(적/보스)는 조용히 무시.
+	 * Gloves는 SetBodyArmourHidden 내부에서 default로 무시한다.
+	 *
+	 * @param Type          방어구 부위.
+	 * @param bHideBodyPart true = 기본 신체 메시 숨김(방어구 착용), false = 표시(방어구 해제).
+	 */
+	void SetBodyPartHidden(EBWArmourType Type, bool bHideBodyPart);
 
 	/**
 	 * 지정 소켓이 OwnerMesh에 존재하는지 확인한다.
@@ -372,4 +414,10 @@ private:
 	 * BeginPlay에서 1회 캐시. 약참조이므로 사용 전 IsValid 확인 필수.
 	 */
 	TWeakObjectPtr<UBWAttackComponent> CachedAttackComponent;
+
+	/**
+	 * 소유 캐릭터의 UBWAttributeComponent. EquipArmourItem에서 방어력 누적에 사용.
+	 * BeginPlay에서 1회 캐시. 약참조이므로 사용 전 IsValid 확인 필수.
+	 */
+	TWeakObjectPtr<UBWAttributeComponent> CachedAttributeComponent;
 };

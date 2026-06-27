@@ -155,6 +155,47 @@ void UBWAttributeComponent::ApplyDamage(float Amount)
 	}
 }
 
+// ── 방어력 API ───────────────────────────────────────────────────────────────
+
+void UBWAttributeComponent::IncreaseDefense(float Amount)
+{
+	if (Amount <= 0.f)
+	{
+		return;
+	}
+
+	DefenseStat += Amount;
+}
+
+void UBWAttributeComponent::DecreaseDefense(float Amount)
+{
+	if (Amount <= 0.f)
+	{
+		return;
+	}
+
+	DefenseStat = FMath::Max(0.f, DefenseStat - Amount);
+}
+
+float UBWAttributeComponent::CalculateMitigatedDamage(float RawDamage) const
+{
+	// 방어력이 없으면 감산 없이 원본 데미지 반환.
+	if (DefenseStat <= 0.f)
+	{
+		return RawDamage;
+	}
+
+	// 비율 감소 공식: Final = Raw * (Scale / (Scale + Defense)).
+	// Scale + Defense가 0이 될 수 없음(Scale >= 1.0 ClampMin 보장).
+	const float Denominator = DefenseScale + DefenseStat;
+	if (Denominator <= 0.f)
+	{
+		return RawDamage;
+	}
+
+	return RawDamage * (DefenseScale / Denominator);
+}
+
 // ── 조회 헬퍼 ────────────────────────────────────────────────────────────────
 
 float UBWAttributeComponent::GetHealthPercent() const
