@@ -20,4 +20,9 @@ namespace BWGameplayTags
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Character_State_Blocking,      "Character.State.Blocking",      "방패 블로킹(가드) 상태");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Character_Action_BlockingHit,  "Character.Action.BlockingHit",  "가드 성공 후 히트 리액션 진행 중");
+
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Character_State_Parrying,      "Character.State.Parrying",      "패링 유효 윈도우 진행 중 — AnimNotifyState가 토글");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Character_State_Parried,       "Character.State.Parried",       "적이 패링 당함 경직 상태");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Character_Action_ParriedHit,   "Character.Action.ParriedHit",   "패링 당함 리액션 몽타주 진행 중");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Character_State_Stunned,       "Character.State.Stunned",       "적 스턴 상태 — 행동 불능");
 }

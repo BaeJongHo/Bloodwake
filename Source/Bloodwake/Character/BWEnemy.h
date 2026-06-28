@@ -47,6 +47,31 @@ public:
 	const TArray<TObjectPtr<ATargetPoint>>& GetPatrolPoints() const { return PatrolPoints; }
 
 	/**
+	 * 플레이어 패링 성공 시 호출된다. 이 적을 Parried 상태로 전환하고 패링 당함 리액션 몽타주를 재생한다.
+	 * 재생 시간 동안 이동이 차단되며, 타이머로 상태를 복구한다.
+	 * bIsDead면 즉시 return.
+	 */
+	void Parried();
+
+	/**
+	 * 현재 스턴(Character.State.Stunned 태그 보유) 상태인지 반환한다.
+	 * PerformAttack 가드 및 BT 서비스에서 사용한다.
+	 */
+	bool IsStunned() const;
+
+	/**
+	 * 현재 패링 당함(Character.State.Parried 태그 보유) 상태인지 반환한다.
+	 * BT 서비스에서 사용한다.
+	 */
+	bool IsParried() const;
+
+	/**
+	 * 현재 손에 장착된 무기 액터를 반환한다. 패링 성공 VFX 스폰 위치로 사용한다.
+	 * CombatComponent->GetEquippedWeapon()의 얇은 래퍼. 없으면 nullptr.
+	 */
+	AActor* GetEquippedWeaponActor() const;
+
+	/**
 	 * 데미지 수신 오버라이드.
 	 * FPointDamageEvent 에서 ImpactPoint/ShotDirection을 추출해
 	 * AttributeComponent에 위임 + 히트 리액션·VFX·사운드를 재생한다.
@@ -173,6 +198,23 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UI")
 	TObjectPtr<UBWEnemyHealthBarComponent> HealthBarWidget;
 
+	// ── BP 설정용 — 스턴(Stun) 데이터 ──────────────────────────────────
+
+	/**
+	 * 일반 피격 시 스턴에 빠질 확률(0~100, %). 0이면 절대 스턴 안 됨.
+	 * BP 자식(BP_<적>)에서 적 종류마다 밸런싱한다.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Enemy|Stun", meta = (ClampMin = "0", ClampMax = "100"))
+	int32 StunnedRate = 0;
+
+	/** 스턴 지속 추가 지연 최소값(초). HitReaction 몽타주 길이에 이 값을 더해 스턴 지속 시간을 결정한다. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Enemy|Stun", meta = (ClampMin = "0.0"))
+	float StunDelayMin = 0.5f;
+
+	/** 스턴 지속 추가 지연 최대값(초). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Enemy|Stun", meta = (ClampMin = "0.0"))
+	float StunDelayMax = 3.0f;
+
 	// ── BP 설정용 — 무기 / 공격 데이터 ──────────────────────────────────
 
 	/**
@@ -243,6 +285,41 @@ protected:
 	TObjectPtr<UAnimMontage> ActiveAttackMontage;
 
 private:
+	/**
+	 * 적 무기 DataTable에서 ParriedHit 행 Steps[0].Montage를 조회한다.
+	 * 무기/DataTable/행/Steps 없으면 nullptr 반환. GetBlockingHitMontage 패턴 동일.
+	 */
+	UAnimMontage* GetParriedHitMontage() const;
+
+	/**
+	 * Parried 몽타주 종료 콜백(안전망). EndParried를 호출해 Parried 상태를 확실히 해제한다.
+	 * 타이머가 주경로이며 이 콜백은 보조 안전망이다.
+	 */
+	void OnParriedMontageEnded(UAnimMontage* Montage, bool bInterrupted);
+
+	/**
+	 * Parried 상태 복구. bIsDead면 아무것도 하지 않는다.
+	 * Parried 태그 제거 + 이동 복구(SetMovementMode) + 타이머 클리어.
+	 */
+	void EndParried();
+
+	/**
+	 * HitReaction 경로에서 호출되는 스턴 확률 적용 함수.
+	 * StunnedRate% 확률로 Stunned 상태 진입 + 이동 차단 + 타이머 예약.
+	 * @param HitReactionMontageLength 히트 리액션 몽타주 재생 길이(초).
+	 */
+	void TryApplyStun(float HitReactionMontageLength);
+
+	/**
+	 * Stunned 상태 복구. bIsDead 가드 후 Stunned 태그 제거 + 이동 복구 + 타이머 클리어.
+	 */
+	void EndStun();
+
+	/** Parried 복구 타이머 핸들. EndPlay에서 ClearTimer. */
+	FTimerHandle ParriedTimerHandle;
+
+	/** Stunned 복구 타이머 핸들. EndPlay에서 ClearTimer. */
+	FTimerHandle StunTimerHandle;
 	/**
 	 * ShotDirection과 피격자 forward/right 내적으로 4방향을 분류한다.
 	 * Front(±45°) / Back / Left / Right.

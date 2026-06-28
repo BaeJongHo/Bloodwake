@@ -39,4 +39,16 @@ namespace BWGameplayTags
 
 	/** 블로킹 히트 리액션(BlockingHit) 액션 태그. 가드 성공 후 피격 리액션 몽타주 진행 중. 문자열: "Character.Action.BlockingHit" */
 	BLOODWAKE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Character_Action_BlockingHit);
+
+	/** 패링(Parrying) 상태 태그. 플레이어가 패링 유효 윈도우 구간에 있음을 나타낸다. 문자열: "Character.State.Parrying" */
+	BLOODWAKE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Character_State_Parrying);
+
+	/** 패링 당함(Parried) 상태 태그. 적이 플레이어 패링에 당해 경직 상태임을 나타낸다. 문자열: "Character.State.Parried" */
+	BLOODWAKE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Character_State_Parried);
+
+	/** 패링 당함 리액션(ParriedHit) 액션 태그. 적의 패링 당함 리액션 몽타주 진행 중. 문자열: "Character.Action.ParriedHit" */
+	BLOODWAKE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Character_Action_ParriedHit);
+
+	/** 스턴(Stunned) 상태 태그. 적이 피격 후 확률적 스턴 상태에 빠진 것을 나타낸다. 문자열: "Character.State.Stunned" */
+	BLOODWAKE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Character_State_Stunned);
 }

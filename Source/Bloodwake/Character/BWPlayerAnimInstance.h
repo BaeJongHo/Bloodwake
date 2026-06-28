@@ -54,6 +54,15 @@ public:
 	UFUNCTION()
 	void AnimNotify_BlockingHitEnd();
 
+	/**
+	 * 패링 몽타주에 배치한 커스텀(이름 기반) AnimNotify "ParryEnd"가 호출하는 함수.
+	 * 원하는 회복 프레임에서 플레이어 캐릭터의 EndParry를 호출해 Parrying 태그 해제 및 이동 입력 잠금 복원을 수행한다.
+	 * 몽타주 끝까지 기다리지 않고 입력을 돌려주기 위한 진입점이다.
+	 * Enemy에서는 CachedPlayerCharacter가 null이므로 무동작(안전).
+	 */
+	UFUNCTION()
+	void AnimNotify_ParryEnd();
+
 protected:
 	/**
 	 * 소유 ACharacter. NativeInitializeAnimation에서 한 번 캐시한다.

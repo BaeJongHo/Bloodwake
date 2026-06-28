@@ -123,6 +123,35 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Combat|Block")
 	void EndBlockingHit();
 
+	/** 현재 패링 윈도우(Character.State.Parrying 태그 보유) 상태인지 반환한다. */
+	UFUNCTION(BlueprintPure, Category = "Combat|Parry")
+	bool IsParrying() const;
+
+	/**
+	 * 패링을 발동할 수 있는 조건을 종합 판정한다.
+	 * 방패 없음/공격중/구르기중/피격중/블로킹중/블로킹히트중/패링중/사망/스태미나부족 중 하나라도 해당하면 false.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Combat|Parry")
+	bool CanParry() const;
+
+	/**
+	 * 패링 성공 판정. TakeDamage에서 블로킹 분기 앞에 호출한다.
+	 * 조건: IsParrying() && 공격자가 정면(ParryFrontDotThreshold 기준).
+	 * @param Attacker 공격한 액터.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Combat|Parry")
+	bool ParriedAttackSucceed(const AActor* Attacker) const;
+
+	/**
+	 * 패링 종료 처리. 패링 몽타주에 배치한 AnimNotify(AnimInstance의 AnimNotify_ParryEnd)가 호출한다.
+	 * Character.State.Parrying 태그를 해제해 StateComponent를 Normal로 복귀시키며,
+	 * Move()의 IsParrying() 게이트로 잠겨 있던 이동 입력을 다시 푼다("State 초기화 및 입력 키기").
+	 * 몽타주 끝까지 기다리지 않고 원하는 회복 프레임에서 입력을 돌려주기 위한 진입점이다.
+	 * 노티파이 누락/몽타주 중단 시에는 OnParryMontageEnded 안전망이 동일하게 태그를 해제한다.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Combat|Parry")
+	void EndParry();
+
 	/**
 	 * 사망 상태인지 반환한다. AI(BWEnemyAIController) 등 외부에서 죽은 플레이어를
 	 * 추격/공격 대상에서 제외하는 판정에 사용한다. BP에서도 조회 가능.
@@ -217,6 +246,12 @@ protected:
 	 * Blocking 상태 태그를 해제하고 이동 속도를 WalkSpeed로 복원한다.
 	 */
 	void BlockingEnd(const FInputActionValue& Value);
+
+	/**
+	 * ParryAction(Started) 콜백 — IA_Parry 버튼 누르는 순간.
+	 * CanParry() 확인 후 패링 몽타주 재생 및 스태미나 소비.
+	 */
+	void OnParry(const FInputActionValue& Value);
 
 	/** JumpAction(Started) 콜백: 구르기/피격/사망 중이 아니면 ACharacter::Jump를 호출한다. */
 	void StartJump();
@@ -369,6 +404,10 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> BlockAction;
 
+	/** 패링 입력 액션. BP 자식에서 IA_Parry 에셋을 지정한다(IMC 바인딩은 사용자가 직접 설정). */
+	UPROPERTY(EditAnywhere, Category = "Input")
+	TObjectPtr<UInputAction> ParryAction;
+
 	// ── 컴포넌트 ────────────────────────────────────────────────────
 
 	/** Health / Stamina / Focus 자원 관리 컴포넌트. */
@@ -446,6 +485,32 @@ protected:
 	/** 구르기 1회에 소비하는 스태미나. 부족하면 구르기가 발동하지 않는다. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Roll", meta = (ClampMin = "0.0"))
 	float RollStaminaCost = 20.f;
+
+	// ── Block(가드) 데이터 — 패링(Parry) 확장 ─────────────────────────────
+
+	/** 패링 1회 소비 스태미나. 부족하면 패링 발동 불가. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Player|Parry", meta = (ClampMin = "0.0"))
+	float ParryStaminaCost = 10.f;
+
+	/** 패링 발동 후 스태미나 리젠이 재개되기까지의 지연(초). AttributeComponent.RegenDelay와 별도로 참고값으로 노출. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Player|Parry", meta = (ClampMin = "0.0"))
+	float ParryRegenDelay = 1.5f;
+
+	/**
+	 * 패링 성공으로 판정할 전방 콘 임계 내적(코사인). 공격한 적이 정면 기준 이 각도 안에 있어야 패링 성공.
+	 * 0.0 = 전방 180°(앞쪽 절반), 0.5 ≈ 전방 120°, 0.707 ≈ 전방 90°.
+	 * BlockFrontDotThreshold와 동일 의미이며 패링 전용 임계값으로 별도 관리한다.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Player|Parry", meta = (ClampMin = "-1.0", ClampMax = "1.0"))
+	float ParryFrontDotThreshold = 0.f;
+
+	/** 패링 성공 시 적 무기 위치에 재생할 Cascade 파티클(방패 막기 연출). BP 자식에서 P_ 에셋 지정. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Player|ParryEffects")
+	TObjectPtr<UParticleSystem> ParryHitVFX;
+
+	/** 패링 성공 시 적 무기 위치에 재생할 사운드. BP 자식에서 SW_/SC_ 에셋 지정. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Player|ParryEffects")
+	TObjectPtr<USoundBase> ParryHitSound;
 
 	// ── Sprint 튜닝 데이터 (BP 자식에서 설정) ───────────────────────
 
@@ -535,6 +600,50 @@ private:
 	 */
 	bool bIsLockedOnCached = false;
 
+	/**
+	 * 구르기 시작 시 락온 스트레이프 상태라 bUseControllerRotationYaw를 일시 비활성화했는지 여부.
+	 * EndRoll에서 (락온 유지 중일 때만) 다시 true로 복원하는 데 사용한다.
+	 */
+	bool bRestoreControllerYawAfterRoll = false;
+
+	/**
+	 * 패링 몽타주가 진행 중인지 여부. OnParry에서 몽타주 재생이 확정되면 true로 설정하고,
+	 * OnParryMontageEnded(정상 종료/중단 모두 호출 보장)에서 false로 되돌린다.
+	 * Character.State.Parrying 태그는 패링 윈도우(NotifyState) 구간에만 켜지므로,
+	 * 윈도우 전/후 회복 구간을 포함한 몽타주 전체 동안 재입력을 막기 위해 별도 플래그로 추적한다.
+	 * CanParry에서 이 값이 true이면 재발동을 차단해 "한 번만 발동"을 보장한다.
+	 */
+	bool bIsPerformingParry = false;
+
+	/**
+	 * 현재 플레이어가 입력 중인 이동 방향(수평 월드 벡터, 정규화)을 반환한다.
+	 * Move()가 컨트롤러 Yaw 기준으로 변환해 넣은 입력을 CharacterMovement에서 읽으므로 카메라 상대 방향이다.
+	 * 이번 프레임 누적 입력(미소비)을 우선 사용하고, 비어 있으면 직전 프레임 소비 입력으로 폴백한다.
+	 * 입력이 없으면 ZeroVector. 구르기 방향 결정에 사용한다.
+	 */
+	FVector GetRollInputDirection() const;
+
+	// ── 패링(Parry) 헬퍼 ────────────────────────────────────────────
+
+	/**
+	 * 무기 DataTable의 Parrying 행에서 패링 몽타주를 조회한다.
+	 * 무기/DataTable/행/Steps 없으면 nullptr 반환. GetBlockingHitMontage 패턴 동일.
+	 */
+	UAnimMontage* GetParryMontage() const;
+
+	/**
+	 * 패링 성공 시 지정 위치에 VFX/사운드를 재생한다.
+	 * PlayBlockingHitReaction의 이펙트 재생 부분과 동일 패턴.
+	 * @param Location VFX/사운드를 재생할 월드 위치(적 무기 위치).
+	 */
+	void PlayParrySuccessEffects(const FVector& Location);
+
+	/**
+	 * 패링 몽타주 종료 콜백(안전망).
+	 * NotifyEnd가 이미 Parrying 태그를 해제했더라도, 누락/중단 대비 RemoveStateTag를 보장 호출한다.
+	 */
+	void OnParryMontageEnded(UAnimMontage* Montage, bool bInterrupted);
+
 	// ── 블로킹 히트 리액션 헬퍼 ────────────────────────────────────
 
 	/**
@@ -564,11 +673,25 @@ private:
 	void SetBlockingHitInputLocked(bool bLocked);
 
 	/**
+	 * 블로킹(가드) 상태를 취소한다. Blocking 태그를 해제하고 이동 속도를 복원한다.
+	 * BlockingEnd(버튼 뗌)와 구르기 시작(Roll)에서 공통으로 호출한다.
+	 * 블로킹 중이 아니면 무동작. 구르기가 가드를 풀어주는 경로는 입력 엣지에 의존하지 않는다.
+	 */
+	void CancelBlocking();
+
+	/**
 	 * 공격자가 플레이어 정면 콘(BlockFrontDotThreshold) 안에 있는지 판정한다.
-	 * 무기 스윙 벡터(ShotDirection)가 아니라 공격자의 실제 위치를 기준으로 하므로
-	 * 가로 베기 등에서도 "정면에서 맞았는가"를 올바르게 판정한다. Attacker가 null이면 false.
+	 * 기존 가드 경로에서 사용한다(BlockFrontDotThreshold를 내부적으로 읽음).
+	 * Attacker가 null이면 false.
 	 */
 	bool IsAttackerInFront(const AActor* Attacker) const;
+
+	/**
+	 * 공격자가 플레이어 정면 콘 안에 있는지 판정한다. 임계값을 인자로 받는 오버로드.
+	 * 패링 경로에서 ParryFrontDotThreshold를 전달해 사용한다.
+	 * 기존 IsAttackerInFront(Attacker)는 이 오버로드에 BlockFrontDotThreshold를 전달해 위임한다.
+	 */
+	bool IsAttackerInFront(const AActor* Attacker, float FrontDotThreshold) const;
 
 	// ── 피격 처리 헬퍼 (Enemy 패턴 복제) ───────────────────────────
 

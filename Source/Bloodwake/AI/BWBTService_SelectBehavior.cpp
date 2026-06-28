@@ -67,6 +67,15 @@ void UBWBTService_SelectBehavior::UpdateBehavior(UBehaviorTreeComponent& OwnerCo
 		return;
 	}
 
+	// ── 스턴/패링 당함 — 최우선 행동 고정 ───────────────────────────────────────
+	// Parried 또는 Stunned 상태이면 모든 다른 판정을 무시하고 Stunned로 고정한다.
+	// 이 동안 공격 태스크가 Abort되고 Approach/Patrol로 전환되지 않는다(제자리 무력화).
+	if (Enemy->IsParried() || Enemy->IsStunned())
+	{
+		SetBehaviorKey(BB, EBWAIBehavior::Stunned);
+		return;
+	}
+
 	// ── 공격 중 행동 고정(hold) ───────────────────────────────────────────────
 	// 공격 모션 재생 중에는 사거리 밖으로 벗어나도 Behavior를 바꾸지 않는다.
 	// MeleeAttack을 유지해 데코레이터가 진행 중인 PerformAttack 태스크를 Abort(모션 캔슬)하지

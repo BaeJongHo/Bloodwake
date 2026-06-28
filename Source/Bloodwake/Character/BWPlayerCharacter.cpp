@@ -27,6 +27,7 @@
 #include "Equipment/BWArmour.h"
 #include "Equipment/BWWeapon.h"
 #include "Equipment/BWShield.h"
+#include "Character/BWEnemy.h"
 #include "DrawDebugHelpers.h"
 
 ABWPlayerCharacter::ABWPlayerCharacter()
@@ -241,6 +242,12 @@ void ABWPlayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputC
 			EnhancedInput->BindAction(BlockAction, ETriggerEvent::Completed, this, &ABWPlayerCharacter::BlockingEnd);
 			EnhancedInput->BindAction(BlockAction, ETriggerEvent::Canceled,  this, &ABWPlayerCharacter::BlockingEnd);
 		}
+
+		if (ParryAction)
+		{
+			// 패링: 버튼 누르는 순간(Started) 단발 발동.
+			EnhancedInput->BindAction(ParryAction, ETriggerEvent::Started, this, &ABWPlayerCharacter::OnParry);
+		}
 	}
 }
 
@@ -321,16 +328,37 @@ float ABWPlayerCharacter::TakeDamage(float DamageAmount, const FDamageEvent& Dam
 		MitigatedDamage = AttributeComponent->CalculateMitigatedDamage(ActualDamage);
 	}
 
+	// 방향 판정(정면 가드/패링 판정 + 4방향 히트 리액션)은 무기 스윙 벡터가 아니라 공격자의 실제 위치로 한다.
+	// DamageCauser(공격 캐릭터)를 우선 사용하고, 없으면 EventInstigator의 폰으로 폴백한다.
+	// ※ 아래 블로킹 분기에도 동일 Attacker가 필요하므로 패링 판정보다 먼저 선언한다.
+	const AActor* Attacker = DamageCauser ? DamageCauser
+		: (EventInstigator ? EventInstigator->GetPawn() : nullptr);
+
+	// ── 패링 성공 판정 (블로킹보다 우선) ────────────────────────────────────
+	if (ParriedAttackSucceed(Attacker))
+	{
+		// 공격한 적을 Parried 상태로 전환한다(같은 모듈 직접 캐스트).
+		ABWEnemy* EnemyAttacker = Cast<ABWEnemy>(const_cast<AActor*>(Attacker));
+		if (EnemyAttacker)
+		{
+			EnemyAttacker->Parried();
+		}
+
+		// 적 무기 위치에 패링 연출(VFX/사운드). 무기 위치가 없으면 ImpactPoint 폴백.
+		const FVector FXLocation = (EnemyAttacker && EnemyAttacker->GetEquippedWeaponActor())
+			? EnemyAttacker->GetEquippedWeaponActor()->GetActorLocation()
+			: ImpactPoint;
+		PlayParrySuccessEffects(FXLocation);
+
+		// 데미지 무효화 — ApplyDamage/HitReaction 건너뜀
+		return ActualDamage;
+	}
+
 	// ── 블로킹(가드) 성공 판정 ──────────────────────────────────────────
 	// 조건: 블로킹 상태 + 히트 리액션 진행 중 아님 + 최소 스태미나 확보 + 공격자가 정면
 	// BlockingHit 리액션 중 재진입하면 EndDelegate가 교체되어 이전 태그 해제 콜백이 유실되므로 차단한다.
 	const bool bBlockingHitInProgress = IsValid(StateComponent)
 		&& StateComponent->HasStateTag(BWGameplayTags::Character_Action_BlockingHit.GetTag());
-
-	// 방향 판정(정면 가드 판정 + 4방향 히트 리액션)은 무기 스윙 벡터가 아니라 공격자의 실제 위치로 한다.
-	// DamageCauser(공격 캐릭터)를 우선 사용하고, 없으면 EventInstigator의 폰으로 폴백한다.
-	const AActor* Attacker = DamageCauser ? DamageCauser
-		: (EventInstigator ? EventInstigator->GetPawn() : nullptr);
 
 	if (IsBlocking()
 		&& !bBlockingHitInProgress
@@ -447,8 +475,10 @@ void ABWPlayerCharacter::EnableDeathState()
 
 void ABWPlayerCharacter::Move(const FInputActionValue& Value)
 {
-	// 구르기, 공격, 피격, 사망 중에는 이동 입력을 무시한다.
-	if (IsRolling() || IsAttacking() || IsHit() || bIsDead)
+	// 구르기, 공격, 피격, 사망, 패링 중에는 이동 입력을 무시한다.
+	// 패링은 윈도우 태그(IsParrying)가 아니라 몽타주 전체를 덮는 bIsPerformingParry로 막는다
+	// (윈도우 전/후 회복 구간에서도 이동이 풀리지 않도록). 해제는 ParryEnd 노티파이(EndParry)/몽타주 종료.
+	if (IsRolling() || IsAttacking() || IsHit() || bIsDead || bIsPerformingParry)
 	{
 		return;
 	}
@@ -556,6 +586,11 @@ void ABWPlayerCharacter::BlockingStart(const FInputActionValue& /*Value*/)
 }
 
 void ABWPlayerCharacter::BlockingEnd(const FInputActionValue& /*Value*/)
+{
+	CancelBlocking();
+}
+
+void ABWPlayerCharacter::CancelBlocking()
 {
 	// 블로킹 상태가 아니면 무시
 	if (!IsBlocking())
@@ -751,6 +786,10 @@ void ABWPlayerCharacter::Roll(const FInputActionValue& Value)
 		return;
 	}
 
+	// 구르기를 시작하므로 블로킹(가드)을 취소한다. StateComponent는 Blocking/Roll 태그가 공존하므로,
+	// 구르기가 끝나도 Blocking 태그가 남아 가드 모션이 풀리지 않는 문제를 막는다(입력 엣지에 의존하지 않음).
+	CancelBlocking();
+
 	// 구르기 상태 진입(Normal 자동 해제). 이 동안 Move/Jump가 차단된다.
 	StateComponent->AddStateTag(BWGameplayTags::Character_State_Roll.GetTag());
 
@@ -758,6 +797,22 @@ void ABWPlayerCharacter::Roll(const FInputActionValue& Value)
 	if (IsValid(AttributeComponent))
 	{
 		AttributeComponent->ConsumeStamina(RollStaminaCost);
+	}
+
+	// 구르기 방향 결정: 플레이어가 입력 중인 방향(카메라 상대 월드 벡터)으로 캐릭터를 회전시켜
+	// 루트모션 구르기가 입력 방향으로 나가게 한다. 입력이 없으면 현재 정면을 유지한다.
+	const FVector RollDirection = GetRollInputDirection();
+	if (!RollDirection.IsNearlyZero())
+	{
+		SetActorRotation(FRotator(0.f, RollDirection.Rotation().Yaw, 0.f));
+
+		// 락온 스트레이프 중에는 bUseControllerRotationYaw=true가 매 틱 캐릭터를 타깃 쪽으로 되돌려
+		// 루트모션이 적 방향으로 휘어진다. 구르기 동안만 추종을 끄고 EndRoll에서 복원한다.
+		if (bUseControllerRotationYaw)
+		{
+			bUseControllerRotationYaw = false;
+			bRestoreControllerYawAfterRoll = true;
+		}
 	}
 
 	// 회피 몽타주 재생.
@@ -789,6 +844,39 @@ void ABWPlayerCharacter::EndRoll()
 		// Roll 태그 해제 → StateComponent가 행동 상태 부재를 감지해 Normal로 자동 복귀시킨다.
 		StateComponent->RemoveStateTag(BWGameplayTags::Character_State_Roll.GetTag());
 	}
+
+	// 구르기 위해 잠시 끈 컨트롤러 Yaw 추종을 복원한다(구르기 시작 시 락온 중이었던 경우에만).
+	if (bRestoreControllerYawAfterRoll)
+	{
+		bRestoreControllerYawAfterRoll = false;
+
+		// 락온이 유지 중일 때만 복원한다. 구르기 도중 락온을 해제했다면 ExitStrafeMode가
+		// 이미 진입 전 값으로 원복했으므로 여기서 true로 덮어쓰지 않는다.
+		if (IsLockedOn())
+		{
+			bUseControllerRotationYaw = true;
+		}
+	}
+}
+
+FVector ABWPlayerCharacter::GetRollInputDirection() const
+{
+	const UCharacterMovementComponent* Movement = GetCharacterMovement();
+	if (!Movement)
+	{
+		return FVector::ZeroVector;
+	}
+
+	// 이번 프레임 누적 입력(아직 소비 전)을 우선 사용하고, 비어 있으면 직전 프레임 소비된 입력을 쓴다.
+	// (입력 처리 순서상 Move가 Roll보다 먼저/나중에 호출되는 두 경우를 모두 포괄한다.)
+	FVector InputDirection = Movement->GetPendingInputVector();
+	if (InputDirection.IsNearlyZero())
+	{
+		InputDirection = Movement->GetLastInputVector();
+	}
+
+	InputDirection.Z = 0.f;
+	return InputDirection.GetSafeNormal();
 }
 
 bool ABWPlayerCharacter::IsLockedOn() const
@@ -935,8 +1023,8 @@ bool ABWPlayerCharacter::IsAttacking() const
 
 void ABWPlayerCharacter::OnAttackStarted(const FInputActionValue& /*Value*/)
 {
-	// 피격, 사망, 블로킹 중에는 공격 입력 차단
-	if (IsHit() || bIsDead || IsBlocking())
+	// 피격, 사망, 블로킹, 패링(몽타주 전체 구간) 중에는 공격 입력 차단
+	if (IsHit() || bIsDead || IsBlocking() || bIsPerformingParry)
 	{
 		return;
 	}
@@ -951,8 +1039,8 @@ void ABWPlayerCharacter::OnAttackStarted(const FInputActionValue& /*Value*/)
 
 void ABWPlayerCharacter::OnAttackHold(const FInputActionValue& /*Value*/)
 {
-	// 피격, 사망, 블로킹 중에는 공격 입력 차단
-	if (IsHit() || bIsDead || IsBlocking())
+	// 피격, 사망, 블로킹, 패링(몽타주 전체 구간) 중에는 공격 입력 차단
+	if (IsHit() || bIsDead || IsBlocking() || bIsPerformingParry)
 	{
 		return;
 	}
@@ -967,8 +1055,8 @@ void ABWPlayerCharacter::OnAttackHold(const FInputActionValue& /*Value*/)
 
 void ABWPlayerCharacter::OnHeavyAttack(const FInputActionValue& /*Value*/)
 {
-	// 피격, 사망, 블로킹 중에는 공격 입력 차단
-	if (IsHit() || bIsDead || IsBlocking())
+	// 피격, 사망, 블로킹, 패링(몽타주 전체 구간) 중에는 공격 입력 차단
+	if (IsHit() || bIsDead || IsBlocking() || bIsPerformingParry)
 	{
 		return;
 	}
@@ -1130,6 +1218,12 @@ void ABWPlayerCharacter::SetBlockingHitInputLocked(bool bLocked)
 
 bool ABWPlayerCharacter::IsAttackerInFront(const AActor* Attacker) const
 {
+	// 기존 가드 경로: BlockFrontDotThreshold를 전달해 오버로드에 위임한다.
+	return IsAttackerInFront(Attacker, BlockFrontDotThreshold);
+}
+
+bool ABWPlayerCharacter::IsAttackerInFront(const AActor* Attacker, float FrontDotThreshold) const
+{
 	if (!Attacker)
 	{
 		return false;
@@ -1147,7 +1241,7 @@ bool ABWPlayerCharacter::IsAttackerInFront(const AActor* Attacker) const
 	Fwd.Z = 0.f;
 	Fwd.Normalize();
 
-	return FVector::DotProduct(Fwd, ToAttacker) >= BlockFrontDotThreshold;
+	return FVector::DotProduct(Fwd, ToAttacker) >= FrontDotThreshold;
 }
 
 // ── 피격 처리 (Enemy 패턴 이식) ──────────────────────────────────────────────
@@ -1297,5 +1391,178 @@ void ABWPlayerCharacter::PlayHitEffects(const FVector& ImpactPoint)
 	if (HitSound)
 	{
 		UGameplayStatics::PlaySoundAtLocation(World, HitSound, ImpactPoint);
+	}
+}
+
+// ── 패링(Parry) 구현 ─────────────────────────────────────────────────────────
+
+bool ABWPlayerCharacter::IsParrying() const
+{
+	return IsValid(StateComponent) && StateComponent->HasStateTag(BWGameplayTags::Character_State_Parrying.GetTag());
+}
+
+bool ABWPlayerCharacter::CanParry() const
+{
+	// 사망 가드
+	if (bIsDead)
+	{
+		return false;
+	}
+
+	// 방패가 손에 없으면 패링 불가
+	if (!IsValid(CombatComponent) || !CombatComponent->IsShieldDrawn())
+	{
+		return false;
+	}
+
+	// 패링 몽타주 진행 중(윈도우 전/후 회복 구간 포함)이면 재입력 차단 — 한 번만 발동.
+	// IsParrying()(Parrying 태그)은 윈도우 구간에만 true라, 윈도우 밖 재입력을 막으려면 이 플래그가 필요하다.
+	if (bIsPerformingParry)
+	{
+		return false;
+	}
+
+	// 공격, 구르기, 피격, 블로킹, 블로킹 히트, 이미 패링 중 상태 차단
+	if (IsAttacking() || IsRolling() || IsHit() || IsBlocking() || IsBlockingHit() || IsParrying())
+	{
+		return false;
+	}
+
+	// 스태미나 부족
+	if (!IsValid(AttributeComponent) || !AttributeComponent->HasEnoughStamina(ParryStaminaCost))
+	{
+		return false;
+	}
+
+	return true;
+}
+
+bool ABWPlayerCharacter::ParriedAttackSucceed(const AActor* Attacker) const
+{
+	return IsParrying() && IsAttackerInFront(Attacker, ParryFrontDotThreshold);
+}
+
+void ABWPlayerCharacter::OnParry(const FInputActionValue& /*Value*/)
+{
+	if (!CanParry())
+	{
+		return;
+	}
+
+	UAnimMontage* ParryMontage = GetParryMontage();
+	if (!ParryMontage)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[BWPlayerCharacter] OnParry: Parrying 몽타주가 설정되지 않았습니다. 무기 DataTable에 Parrying 행을 추가하세요."));
+		return;
+	}
+
+	// 패링 몽타주 재생
+	UAnimInstance* AnimInstance = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr;
+	if (!AnimInstance)
+	{
+		return;
+	}
+
+	// 스태미나 소비 — GetParryMontage() null 체크와 AnimInstance null 체크를 모두 통과한 뒤,
+	// 실제 패링 발동이 확정된 시점에 소비한다. "재생 실패 시 조기 return 경로"가 모두 여기보다 앞에 있어
+	// AnimInstance가 null인 경우 스태미나만 차감되고 패링이 발동되지 않는 버그를 방지한다.
+	if (IsValid(AttributeComponent))
+	{
+		AttributeComponent->ConsumeStamina(ParryStaminaCost);
+	}
+
+	const float MontageLength = AnimInstance->Montage_Play(ParryMontage);
+	if (MontageLength > 0.f)
+	{
+		// 패링 몽타주 진행 시작 — 몽타주 종료까지 재입력을 막는다(한 번만 발동).
+		bIsPerformingParry = true;
+
+		// 종료 안전망 바인딩 (NotifyEnd 미작동 시에도 Parrying 태그 해제 보장)
+		FOnMontageEnded EndDelegate;
+		EndDelegate.BindUObject(this, &ABWPlayerCharacter::OnParryMontageEnded);
+		AnimInstance->Montage_SetEndDelegate(EndDelegate, ParryMontage);
+	}
+	// 재생 실패 시: Parrying 태그가 부착되지 않았으므로(NotifyBegin 미호출) 별도 해제 불필요.
+}
+
+UAnimMontage* ABWPlayerCharacter::GetParryMontage() const
+{
+	if (!IsValid(CombatComponent))
+	{
+		return nullptr;
+	}
+
+	const ABWWeapon* Weapon = Cast<ABWWeapon>(CombatComponent->GetEquippedWeapon());
+	if (!Weapon)
+	{
+		return nullptr;
+	}
+
+	UDataTable* DataTable = Weapon->GetAttackDataTable();
+	if (!DataTable)
+	{
+		return nullptr;
+	}
+
+	const FBWAttackComboRow* Row = DataTable->FindRow<FBWAttackComboRow>(
+		BWAttackRowNames::Parrying,
+		TEXT("[BWPlayerCharacter] GetParryMontage"),
+		/*bWarnIfRowMissing=*/false);
+
+	if (!Row || Row->Steps.Num() == 0)
+	{
+		return nullptr;
+	}
+
+	return Row->Steps[0].Montage.Get();
+}
+
+void ABWPlayerCharacter::PlayParrySuccessEffects(const FVector& Location)
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	if (ParryHitVFX)
+	{
+		UGameplayStatics::SpawnEmitterAtLocation(
+			World,
+			ParryHitVFX,
+			Location,
+			FRotator::ZeroRotator,
+			/*bAutoDestroy=*/true);
+	}
+
+	if (ParryHitSound)
+	{
+		UGameplayStatics::PlaySoundAtLocation(World, ParryHitSound, Location);
+	}
+}
+
+void ABWPlayerCharacter::OnParryMontageEnded(UAnimMontage* /*Montage*/, bool /*bInterrupted*/)
+{
+	// 패링 몽타주 종료(정상/중단 모두) — 재입력 차단 해제. 이 시점부터 다시 패링 가능.
+	bIsPerformingParry = false;
+
+	// 안전망: NotifyEnd가 이미 Parrying 태그를 제거했더라도 중복 제거는 무해하다.
+	if (IsValid(StateComponent))
+	{
+		StateComponent->RemoveStateTag(BWGameplayTags::Character_State_Parrying.GetTag());
+	}
+}
+
+void ABWPlayerCharacter::EndParry()
+{
+	// 패링 종료 — 이동·공격·재패링 잠금을 모두 해제하는 단일 지점.
+	// ParryEnd 노티파이를 배치한 프레임이 곧 입력이 돌아오는 시점이 된다.
+	bIsPerformingParry = false;
+
+	// State 초기화: Parrying 태그 해제 → StateComponent가 행동 상태 부재를 감지해 Normal로 자동 복귀.
+	if (IsValid(StateComponent))
+	{
+		StateComponent->RemoveStateTag(BWGameplayTags::Character_State_Parrying.GetTag());
 	}
 }

@@ -84,6 +84,16 @@ void UBWPlayerAnimInstance::AnimNotify_BlockingHitEnd()
 	}
 }
 
+void UBWPlayerAnimInstance::AnimNotify_ParryEnd()
+{
+	// 플레이어 캐릭터에 한해 EndParry를 호출한다(Parrying 태그 해제 + 이동 입력 잠금 복원).
+	// Enemy에서는 CachedPlayerCharacter가 null이므로 무동작(안전).
+	if (CachedPlayerCharacter.IsValid())
+	{
+		CachedPlayerCharacter->EndParry();
+	}
+}
+
 void UBWPlayerAnimInstance::NativeThreadSafeUpdateAnimation(float DeltaSeconds)
 {
 	Super::NativeThreadSafeUpdateAnimation(DeltaSeconds);

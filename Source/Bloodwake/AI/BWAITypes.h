@@ -18,4 +18,5 @@ enum class EBWAIBehavior : uint8
 	Patrol      UMETA(DisplayName = "Patrol"),       // 타깃 미감지 & 순찰점 있음 — 순찰
 	Approach    UMETA(DisplayName = "Approach"),     // 타깃 감지 & 공격 사거리 밖 — 추격
 	MeleeAttack UMETA(DisplayName = "MeleeAttack"),  // 타깃 감지 & 공격 사거리 안 — 근접 공격
+	Stunned     UMETA(DisplayName = "Stunned"),      // 패링 당함/스턴 — 행동 불능, 제자리 정지
 };

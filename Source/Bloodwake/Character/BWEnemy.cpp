@@ -22,6 +22,7 @@
 #include "Equipment/BWWeapon.h"
 #include "UI/BWEnemyHealthBarComponent.h"
 #include "Perception/AISense_Damage.h"
+#include "TimerManager.h"
 
 ABWEnemy::ABWEnemy()
 {
@@ -77,6 +78,13 @@ void ABWEnemy::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	if (AttributeComponent)
 	{
 		AttributeComponent->OnDeath.RemoveDynamic(this, &ABWEnemy::HandleDeath);
+	}
+
+	// Parried/Stunned 복구 타이머 클리어 (댕글링 콜백 방지)
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(ParriedTimerHandle);
+		World->GetTimerManager().ClearTimer(StunTimerHandle);
 	}
 
 	Super::EndPlay(EndPlayReason);
@@ -140,6 +148,13 @@ void ABWEnemy::PerformAttack(FOnMontageEnded OnEnded)
 		return;
 	}
 
+	// 3-a) Stunned/Parried 상태 가드 — BT Latent 교착 방지 위해 OnEnded 즉시 호출
+	if (IsStunned() || IsParried())
+	{
+		OnEnded.ExecuteIfBound(nullptr, true);
+		return;
+	}
+
 	// 3) DataTable 유효성 검사
 	if (!EnemyAttackDataTable)
 	{
@@ -156,8 +171,9 @@ void ABWEnemy::PerformAttack(FOnMontageEnded OnEnded)
 	const TArray<FName>& RowNames = EnemyAttackDataTable->GetRowNames();
 	for (const FName& RowName : RowNames)
 	{
-		// Equip/Unequip 행 제외
-		if (RowName == TEXT("Equip") || RowName == TEXT("Unequip"))
+		// 공격 아닌 특수 행(Equip/Unequip/BlockingHit/Parrying/ParriedHit) 제외
+		if (RowName == TEXT("Equip") || RowName == TEXT("Unequip")
+			|| RowName == TEXT("BlockingHit") || RowName == TEXT("Parrying") || RowName == TEXT("ParriedHit"))
 		{
 			continue;
 		}
@@ -472,7 +488,13 @@ void ABWEnemy::PlayHitReaction(const FVector& ShotDirection)
 		return;
 	}
 
-	AnimInstance->Montage_Play(MontageToPlay);
+	const float MontageLength = AnimInstance->Montage_Play(MontageToPlay);
+
+	// 재생 성공 시 스턴 확률 적용 — TryApplyStun 내부에서 StunnedRate 판정
+	if (MontageLength > 0.f)
+	{
+		TryApplyStun(MontageLength);
+	}
 }
 
 void ABWEnemy::PlayHitEffects(const FVector& ImpactPoint)
@@ -499,6 +521,261 @@ void ABWEnemy::PlayHitEffects(const FVector& ImpactPoint)
 	if (HitSound)
 	{
 		UGameplayStatics::PlaySoundAtLocation(World, HitSound, ImpactPoint);
+	}
+}
+
+// ── 패링 당함(Parried) / 스턴(Stunned) 구현 ─────────────────────────────────
+
+void ABWEnemy::Parried()
+{
+	if (bIsDead)
+	{
+		return;
+	}
+
+	// 이미 Parried 상태이면 재진입을 차단한다.
+	// 재진입 허용 시 ClearAllStateTags + DisableMovement + 타이머/EndDelegate가 중복 실행되어
+	// 이전 몽타주의 EndDelegate가 교체되고 EndParried()가 중복 호출될 수 있다.
+	if (IsParried())
+	{
+		return;
+	}
+
+	// 진행 중인 공격 몽타주를 정지하고 공격 태그를 해제한다.
+	AbortCurrentAttack();
+
+	// 상태 초기화 후 Parried 태그 부착 (Stunned/Attack 혼재 방지)
+	if (IsValid(StateComponent))
+	{
+		StateComponent->ClearAllStateTags();
+		StateComponent->AddStateTag(BWGameplayTags::Character_State_Parried.GetTag());
+	}
+
+	// 패링 당함 리액션 몽타주 조회
+	UAnimMontage* ParriedMontage = GetParriedHitMontage();
+	UAnimInstance* AnimInstance = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr;
+
+	// 이동 차단
+	if (UCharacterMovementComponent* MoveComp = GetCharacterMovement())
+	{
+		MoveComp->DisableMovement();
+	}
+
+	if (!ParriedMontage || !AnimInstance)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[BWEnemy] Parried: ParriedHit 몽타주가 설정되지 않았습니다. (%s) 무기 DataTable에 ParriedHit 행을 추가하세요."),
+			*GetName());
+
+		// 몽타주 없음: 짧은 폴백 타이머 후 상태 해제 (갇힘 방지)
+		if (UWorld* World = GetWorld())
+		{
+			World->GetTimerManager().SetTimer(
+				ParriedTimerHandle,
+				this,
+				&ABWEnemy::EndParried,
+				0.5f,
+				/*bLoop=*/false);
+		}
+		return;
+	}
+
+	const float MontageLength = AnimInstance->Montage_Play(ParriedMontage);
+	if (MontageLength > 0.f)
+	{
+		// Parried 리액션 진행 중 태그 추가
+		if (IsValid(StateComponent))
+		{
+			StateComponent->AddStateTag(BWGameplayTags::Character_Action_ParriedHit.GetTag());
+		}
+
+		// 안전망 EndDelegate 바인딩
+		FOnMontageEnded EndDelegate;
+		EndDelegate.BindUObject(this, &ABWEnemy::OnParriedMontageEnded);
+		AnimInstance->Montage_SetEndDelegate(EndDelegate, ParriedMontage);
+
+		// 타이머 주경로: 몽타주 길이 후 EndParried 호출
+		if (UWorld* World = GetWorld())
+		{
+			World->GetTimerManager().SetTimer(
+				ParriedTimerHandle,
+				this,
+				&ABWEnemy::EndParried,
+				MontageLength,
+				/*bLoop=*/false);
+		}
+	}
+	else
+	{
+		// 재생 실패 — 폴백 타이머로 갇힘 방지
+		UE_LOG(LogTemp, Warning, TEXT("[BWEnemy] Parried: Montage_Play 실패. (%s)"), *GetName());
+		if (UWorld* World = GetWorld())
+		{
+			World->GetTimerManager().SetTimer(
+				ParriedTimerHandle,
+				this,
+				&ABWEnemy::EndParried,
+				0.3f,
+				/*bLoop=*/false);
+		}
+	}
+}
+
+bool ABWEnemy::IsStunned() const
+{
+	return IsValid(StateComponent) && StateComponent->HasStateTag(BWGameplayTags::Character_State_Stunned.GetTag());
+}
+
+bool ABWEnemy::IsParried() const
+{
+	return IsValid(StateComponent) && StateComponent->HasStateTag(BWGameplayTags::Character_State_Parried.GetTag());
+}
+
+AActor* ABWEnemy::GetEquippedWeaponActor() const
+{
+	if (!IsValid(CombatComponent))
+	{
+		return nullptr;
+	}
+
+	return CombatComponent->GetEquippedWeapon();
+}
+
+UAnimMontage* ABWEnemy::GetParriedHitMontage() const
+{
+	if (!IsValid(CombatComponent))
+	{
+		return nullptr;
+	}
+
+	const ABWWeapon* Weapon = Cast<ABWWeapon>(CombatComponent->GetEquippedWeapon());
+	if (!Weapon)
+	{
+		return nullptr;
+	}
+
+	UDataTable* DataTable = Weapon->GetAttackDataTable();
+	if (!DataTable)
+	{
+		return nullptr;
+	}
+
+	const FBWAttackComboRow* Row = DataTable->FindRow<FBWAttackComboRow>(
+		BWAttackRowNames::ParriedHit,
+		TEXT("[BWEnemy] GetParriedHitMontage"),
+		/*bWarnIfRowMissing=*/false);
+
+	if (!Row || Row->Steps.Num() == 0)
+	{
+		return nullptr;
+	}
+
+	return Row->Steps[0].Montage.Get();
+}
+
+void ABWEnemy::OnParriedMontageEnded(UAnimMontage* /*Montage*/, bool /*bInterrupted*/)
+{
+	// 안전망: 타이머가 주경로이지만, 몽타주 중단/노티파이 누락 대비
+	EndParried();
+}
+
+void ABWEnemy::EndParried()
+{
+	if (bIsDead)
+	{
+		// 사망 중이면 이동 복구 없이 종료 — EnableRagdoll이 이동을 이미 비활성화
+		return;
+	}
+
+	// Parried 관련 태그 모두 해제
+	if (IsValid(StateComponent))
+	{
+		StateComponent->RemoveStateTag(BWGameplayTags::Character_State_Parried.GetTag());
+		StateComponent->RemoveStateTag(BWGameplayTags::Character_Action_ParriedHit.GetTag());
+	}
+
+	// 이동 복구
+	if (UCharacterMovementComponent* MoveComp = GetCharacterMovement())
+	{
+		MoveComp->SetMovementMode(MOVE_Walking);
+	}
+
+	// 타이머 클리어 (EndDelegate가 먼저 호출된 경우 중복 방지)
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(ParriedTimerHandle);
+	}
+}
+
+void ABWEnemy::TryApplyStun(float HitReactionMontageLength)
+{
+	if (bIsDead)
+	{
+		return;
+	}
+
+	// 이미 스턴/패링 당함 상태면 중복 진입 방지
+	if (IsStunned() || IsParried())
+	{
+		return;
+	}
+
+	// 확률 판정: 1~100 사이 랜덤 정수가 StunnedRate 이하면 스턴 진입
+	if (FMath::RandRange(1, 100) > StunnedRate)
+	{
+		return;
+	}
+
+	// Stunned 상태 태그 부착
+	if (IsValid(StateComponent))
+	{
+		StateComponent->AddStateTag(BWGameplayTags::Character_State_Stunned.GetTag());
+	}
+
+	// 이동 차단
+	if (UCharacterMovementComponent* MoveComp = GetCharacterMovement())
+	{
+		MoveComp->DisableMovement();
+	}
+
+	// 스턴 지속 시간 = 히트 리액션 몽타주 길이 + 랜덤 추가 지연
+	const float AdditionalDelay = FMath::FRandRange(StunDelayMin, StunDelayMax);
+	const float TotalDelay = HitReactionMontageLength + AdditionalDelay;
+
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().SetTimer(
+			StunTimerHandle,
+			this,
+			&ABWEnemy::EndStun,
+			TotalDelay,
+			/*bLoop=*/false);
+	}
+}
+
+void ABWEnemy::EndStun()
+{
+	if (bIsDead)
+	{
+		return;
+	}
+
+	// Stunned 태그 해제
+	if (IsValid(StateComponent))
+	{
+		StateComponent->RemoveStateTag(BWGameplayTags::Character_State_Stunned.GetTag());
+	}
+
+	// 이동 복구
+	if (UCharacterMovementComponent* MoveComp = GetCharacterMovement())
+	{
+		MoveComp->SetMovementMode(MOVE_Walking);
+	}
+
+	// 타이머 클리어 (중복 방지)
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(StunTimerHandle);
 	}
 }
 
