@@ -79,4 +79,6 @@ namespace BWAttackRowNames
 	inline const FName Equip   = FName(TEXT("Equip"));
 	/** 무기 넣기(손→등) DataTable 행 키. FBWAttackComboRow.Steps[0].Montage가 해제 몽타주. */
 	inline const FName Unequip = FName(TEXT("Unequip"));
+	/** 가드 피격 리액션 DataTable 행 키. FBWAttackComboRow.Steps[0].Montage가 블로킹 히트 몽타주. */
+	inline const FName BlockingHit = FName(TEXT("BlockingHit"));
 }

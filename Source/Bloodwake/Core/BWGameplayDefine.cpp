@@ -17,4 +17,7 @@ namespace BWGameplayTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Character_Attack_Running, "Character.Attack.Running", "대쉬 공격(스프린트 중 공격) 진행 중");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Character_Attack_Special, "Character.Attack.Special", "특수 공격(길게 누름) 진행 중");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Character_Attack_Heavy,   "Character.Attack.Heavy",   "강공격(콤보) 진행 중");
+
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Character_State_Blocking,      "Character.State.Blocking",      "방패 블로킹(가드) 상태");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Character_Action_BlockingHit,  "Character.Action.BlockingHit",  "가드 성공 후 히트 리액션 진행 중");
 }

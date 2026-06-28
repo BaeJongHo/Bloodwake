@@ -33,4 +33,10 @@ namespace BWGameplayTags
 	BLOODWAKE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Character_Attack_Running);
 	BLOODWAKE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Character_Attack_Special);
 	BLOODWAKE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Character_Attack_Heavy);
+
+	/** 블로킹(Block) 상태 태그. 방패 가드 모션이 활성 상태임을 나타낸다. 문자열: "Character.State.Blocking" */
+	BLOODWAKE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Character_State_Blocking);
+
+	/** 블로킹 히트 리액션(BlockingHit) 액션 태그. 가드 성공 후 피격 리액션 몽타주 진행 중. 문자열: "Character.Action.BlockingHit" */
+	BLOODWAKE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Character_Action_BlockingHit);
 }

@@ -22,6 +22,14 @@ public:
 	/** 방패 슬롯을 반환한다. CombatComponent의 슬롯 라우팅에 사용된다. */
 	virtual EBWEquipSlot GetEquipSlot() const override { return EBWEquipSlot::Shield; }
 
+	/** 가드 시 데미지 감쇄 비율을 반환한다. TakeDamage 블로킹 분기에서 사용한다. */
+	UFUNCTION(BlueprintPure, Category = "Shield|Guard")
+	float GetBlockDamageReduction() const { return BlockDamageReduction; }
+
+	/** 가드 1회 스태미나 소모량을 반환한다. 가드 성공 시 AttributeComponent에 소비한다. */
+	UFUNCTION(BlueprintPure, Category = "Shield|Guard")
+	float GetGuardStaminaCost() const { return GuardStaminaCost; }
+
 protected:
 	/** 가드 시 데미지 감쇄 비율(0=무감쇄, 1=완전 차단). BP 자식에서 밸런싱. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Shield|Guard", meta = (ClampMin = "0.0", ClampMax = "1.0"))

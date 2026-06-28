@@ -43,15 +43,17 @@ void UBWPlayerAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 		CachedCombatType   = CachedCombatComponent->GetCurrentCombatType();
 	}
 
-	// 플레이어 전용: 락온 상태 캐시 갱신.
-	// Enemy에서는 CachedPlayerCharacter가 null이므로 bCachedIsLockedOn이 false로 유지된다.
+	// 플레이어 전용: 락온 상태 및 블로킹 상태 캐시 갱신.
+	// Enemy에서는 CachedPlayerCharacter가 null이므로 각 캐시가 false로 유지된다.
 	if (CachedPlayerCharacter.IsValid())
 	{
-		bCachedIsLockedOn = CachedPlayerCharacter->IsLockedOn();
+		bCachedIsLockedOn      = CachedPlayerCharacter->IsLockedOn();
+		bCachedShouldBlocking  = CachedPlayerCharacter->IsBlocking();
 	}
 	else
 	{
-		bCachedIsLockedOn = false;
+		bCachedIsLockedOn     = false;
+		bCachedShouldBlocking = false;
 	}
 
 	// 액터 회전 캐시 갱신. 워커 스레드(NativeThreadSafeUpdateAnimation)에서
@@ -69,6 +71,16 @@ void UBWPlayerAnimInstance::AnimNotify_RollEnd()
 	if (CachedPlayerCharacter.IsValid())
 	{
 		CachedPlayerCharacter->EndRoll();
+	}
+}
+
+void UBWPlayerAnimInstance::AnimNotify_BlockingHitEnd()
+{
+	// 플레이어 캐릭터에 한해 EndBlockingHit를 호출한다.
+	// Enemy에서는 CachedPlayerCharacter가 null이므로 무동작(안전).
+	if (CachedPlayerCharacter.IsValid())
+	{
+		CachedPlayerCharacter->EndBlockingHit();
 	}
 }
 
@@ -113,6 +125,9 @@ void UBWPlayerAnimInstance::NativeThreadSafeUpdateAnimation(float DeltaSeconds)
 	// 전투 상태 pull. NativeUpdateAnimation(게임 스레드)에서 미리 캐시해 둔 값을 복사한다.
 	bIsWeaponDrawn    = bCachedWeaponDrawn;
 	CurrentCombatType = CachedCombatType;
+
+	// 블로킹 상태 pull. NativeUpdateAnimation(게임 스레드)에서 미리 캐시해 둔 값을 복사한다.
+	bShouldBlocking = bCachedShouldBlocking;
 
 	// 액터 전방 기준 이동 방향(도). 스트레이프 블렌드스페이스용으로 직접 계산해
 	// AnimGraphRuntime(UKismetAnimationLibrary) 의존성을 추가하지 않는다.

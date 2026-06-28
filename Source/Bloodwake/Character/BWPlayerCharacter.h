@@ -100,6 +100,30 @@ public:
 	bool IsAttacking() const;
 
 	/**
+	 * 블로킹(가드)을 시작할 수 있는 조건을 확인한다.
+	 * 사망·질주·공격·피격·구르기 중이 아니고 방패가 손에 들려 있어야 한다.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Combat|Block")
+	bool CanBlock() const;
+
+	/** 현재 블로킹(Character.State.Blocking 태그 보유) 상태인지 반환한다. */
+	UFUNCTION(BlueprintPure, Category = "Combat|Block")
+	bool IsBlocking() const;
+
+	/** 현재 블로킹 히트(Character.Action.BlockingHit 태그 보유, 가드 피격 경직) 상태인지 반환한다. */
+	UFUNCTION(BlueprintPure, Category = "Combat|Block")
+	bool IsBlockingHit() const;
+
+	/**
+	 * 블로킹 히트(가드 피격 경직) 종료 처리. BlockingHit 몽타주에 배치한 AnimNotify
+	 * (AnimInstance의 AnimNotify_BlockingHitEnd)가 회복 프레임에서 호출한다.
+	 * Character.Action.BlockingHit 태그를 해제하고 경직 동안 잠갔던 입력을 복원한다.
+	 * 노티파이 누락/몽타주 중단 시에는 몽타주 종료 콜백(OnBlockingHitMontageEnded)이 안전망으로 호출한다.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Combat|Block")
+	void EndBlockingHit();
+
+	/**
 	 * 사망 상태인지 반환한다. AI(BWEnemyAIController) 등 외부에서 죽은 플레이어를
 	 * 추격/공격 대상에서 제외하는 판정에 사용한다. BP에서도 조회 가능.
 	 */
@@ -181,6 +205,18 @@ protected:
 
 	/** LookAction 콜백: 마우스/우스틱 입력을 컨트롤러 회전(Yaw/Pitch)에 적용한다. */
 	void Look(const FInputActionValue& Value);
+
+	/**
+	 * BlockAction(Started) 콜백 — IA_Block 버튼 누르는 순간.
+	 * CanBlock() 확인 후 Blocking 상태 태그 부착 및 이동 속도 감소를 적용한다.
+	 */
+	void BlockingStart(const FInputActionValue& Value);
+
+	/**
+	 * BlockAction(Completed/Canceled) 콜백 — IA_Block 버튼 뗄 때.
+	 * Blocking 상태 태그를 해제하고 이동 속도를 WalkSpeed로 복원한다.
+	 */
+	void BlockingEnd(const FInputActionValue& Value);
 
 	/** JumpAction(Started) 콜백: 구르기/피격/사망 중이 아니면 ACharacter::Jump를 호출한다. */
 	void StartJump();
@@ -329,6 +365,10 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> SwitchTargetAction;
 
+	/** 블로킹(가드) 입력 액션. BP 자식에서 IA_Block 에셋을 지정한다. */
+	UPROPERTY(EditAnywhere, Category = "Input")
+	TObjectPtr<UInputAction> BlockAction;
+
 	// ── 컴포넌트 ────────────────────────────────────────────────────
 
 	/** Health / Stamina / Focus 자원 관리 컴포넌트. */
@@ -377,6 +417,31 @@ protected:
 	/** 회피(Roll) 시 재생할 몽타주. BP 자식에서 AM_ 회피 몽타주를 지정한다. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Roll")
 	TObjectPtr<UAnimMontage> RollMontage;
+
+	// ── Block(가드) 데이터 (BP 자식에서 설정) ────────────────────────
+
+	/** 블로킹 중 이동 속도(cm/s). BlockingStart 시 적용되고, BlockingEnd 시 WalkSpeed로 복원된다. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Movement|Block", meta = (ClampMin = "0.0"))
+	float BlockingSpeed = 150.f;
+
+	/** 가드를 발동하기 위해 필요한 최소 스태미나. 미만이면 가드 피격 판정을 허용하지 않는다. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Player|Block", meta = (ClampMin = "0.0"))
+	float BlockMinStamina = 20.f;
+
+	/**
+	 * 가드 성공으로 판정할 전방 콘 임계 내적(코사인). 공격자가 플레이어 정면 기준 이 각도 안에 있어야 가드된다.
+	 * 0.0 = 전방 180°(앞쪽 절반), 0.5 ≈ 전방 120°, 0.707 ≈ 전방 90°. 값이 클수록 좁은 정면만 가드.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Player|Block", meta = (ClampMin = "-1.0", ClampMax = "1.0"))
+	float BlockFrontDotThreshold = 0.f;
+
+	/** 블로킹 성공 피격 시 ImpactPoint에 재생할 Cascade 파티클 VFX. BP 자식에서 P_ 에셋 지정. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Player|BlockEffects")
+	TObjectPtr<UParticleSystem> BlockHitVFX;
+
+	/** 블로킹 성공 피격 시 ImpactPoint에 재생할 사운드. BP 자식에서 SW_/SC_ 에셋 지정. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Player|BlockEffects")
+	TObjectPtr<USoundBase> BlockHitSound;
 
 	/** 구르기 1회에 소비하는 스태미나. 부족하면 구르기가 발동하지 않는다. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Roll", meta = (ClampMin = "0.0"))
@@ -457,6 +522,9 @@ private:
 	/** Sprint 버튼이 눌린 채로 유지되고 있는지 여부. 자동 재개 판정에 사용. */
 	bool bSprintInputHeld = false;
 
+	/** 블로킹 시작 전 이동 속도 백업값. BlockingEnd 시 MaxWalkSpeed 복원에 사용. */
+	float SpeedBeforeBlocking = 0.f;
+
 	/** 스태미나 소모 반복 타이머 핸들. */
 	FTimerHandle SprintDrainTimerHandle;
 
@@ -467,20 +535,56 @@ private:
 	 */
 	bool bIsLockedOnCached = false;
 
+	// ── 블로킹 히트 리액션 헬퍼 ────────────────────────────────────
+
+	/**
+	 * 무기 DataTable의 BlockingHit 행에서 몽타주를 조회한다.
+	 * 무기/DataTable/행/Steps 없으면 nullptr 반환.
+	 */
+	UAnimMontage* GetBlockingHitMontage() const;
+
+	/**
+	 * 가드 성공 시 블로킹 히트 리액션 몽타주를 재생하고 ImpactPoint에 이펙트/사운드를 스폰한다.
+	 * BlockingHit 태그를 부착해 입력을 잠그고, 몽타주 종료 시 자동 해제된다.
+	 */
+	void PlayBlockingHitReaction(const FVector& ImpactPoint);
+
+	/**
+	 * 블로킹 히트 몽타주 종료 콜백. Character_Action_BlockingHit 태그를 해제한다(안전망).
+	 * 정상 종료든 중단이든 BlockingHit 상태가 남아 입력이 먹통이 되지 않도록 보장.
+	 */
+	void OnBlockingHitMontageEnded(UAnimMontage* Montage, bool bInterrupted);
+
+	/**
+	 * 블로킹 히트 경직 동안 모든 플레이어 입력을 잠그거나(true) 복원한다(false).
+	 * 핸들러 누락을 피하기 위해 사망 입력 차단(EnableDeathState)과 동일하게
+	 * PlayerController 단위(SetIgnoreMoveInput/SetIgnoreLookInput + DisableInput)로 처리한다.
+	 * 잠금/복원은 정확히 1쌍으로만 호출된다(EndBlockingHit의 IsBlockingHit 가드가 중복 복원을 차단).
+	 */
+	void SetBlockingHitInputLocked(bool bLocked);
+
+	/**
+	 * 공격자가 플레이어 정면 콘(BlockFrontDotThreshold) 안에 있는지 판정한다.
+	 * 무기 스윙 벡터(ShotDirection)가 아니라 공격자의 실제 위치를 기준으로 하므로
+	 * 가로 베기 등에서도 "정면에서 맞았는가"를 올바르게 판정한다. Attacker가 null이면 false.
+	 */
+	bool IsAttackerInFront(const AActor* Attacker) const;
+
 	// ── 피격 처리 헬퍼 (Enemy 패턴 복제) ───────────────────────────
 
 	/**
-	 * ShotDirection과 피격자 forward/right 내적으로 4방향을 분류한다.
-	 * Front(±45°) / Back / Left / Right.
+	 * 공격자의 실제 위치와 피격자 forward/right 내적으로 4방향을 분류한다.
+	 * Front(±45°) / Back / Left / Right. Attacker가 null이면 Front로 폴백.
+	 * (무기 스윙 벡터가 아닌 공격자 위치 기준 — 가로 베기 등에서도 방향이 올바르다.)
 	 */
-	EBWHitDirection ComputeHitDirection(const FVector& ShotDirection) const;
+	EBWHitDirection ComputeHitDirection(const AActor* Attacker) const;
 
 	/**
 	 * 분류된 방향에 따라 해당 히트 리액션 몽타주를 재생하고 Character_State_Hit 태그를 부착한다.
 	 * 몽타주 종료 시 Character_State_Hit 태그를 제거하는 안전망 콜백을 바인딩한다.
 	 * 해당 방향 몽타주가 null이면 Front로 폴백, Front도 null이면 Warning.
 	 */
-	void PlayHitReaction(const FVector& ShotDirection);
+	void PlayHitReaction(const AActor* Attacker);
 
 	/**
 	 * 히트 리액션 몽타주 종료 콜백. Character_State_Hit 태그를 제거한다.

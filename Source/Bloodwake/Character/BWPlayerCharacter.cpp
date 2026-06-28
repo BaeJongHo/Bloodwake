@@ -25,6 +25,8 @@
 #include "Equipment/BWPickUpItem.h"
 #include "Equipment/BWEquipItem.h"
 #include "Equipment/BWArmour.h"
+#include "Equipment/BWWeapon.h"
+#include "Equipment/BWShield.h"
 #include "DrawDebugHelpers.h"
 
 ABWPlayerCharacter::ABWPlayerCharacter()
@@ -231,6 +233,14 @@ void ABWPlayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputC
 		{
 			EnhancedInput->BindAction(SwitchTargetAction, ETriggerEvent::Started, this, &ABWPlayerCharacter::OnSwitchTarget);
 		}
+
+		if (BlockAction)
+		{
+			// 블로킹: 버튼 누르는 순간 시작, 뗄 때(Completed/Canceled) 종료.
+			EnhancedInput->BindAction(BlockAction, ETriggerEvent::Started,   this, &ABWPlayerCharacter::BlockingStart);
+			EnhancedInput->BindAction(BlockAction, ETriggerEvent::Completed, this, &ABWPlayerCharacter::BlockingEnd);
+			EnhancedInput->BindAction(BlockAction, ETriggerEvent::Canceled,  this, &ABWPlayerCharacter::BlockingEnd);
+		}
 	}
 }
 
@@ -294,32 +304,68 @@ float ABWPlayerCharacter::TakeDamage(float DamageAmount, const FDamageEvent& Dam
 	// 엔진 표준 처리를 통해 실제 데미지 수치를 획득한다.
 	const float ActualDamage = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
 
-	// FPointDamageEvent에서 ImpactPoint/ShotDirection 추출
+	// FPointDamageEvent에서 ImpactPoint 추출 (VFX/사운드 스폰 위치).
+	// 방향 판정은 무기 스윙 벡터(ShotDirection)가 아니라 공격자 실제 위치를 쓰므로 ShotDirection은 사용하지 않는다.
 	FVector ImpactPoint = GetActorLocation();
-	FVector ShotDirection = GetActorForwardVector(); // 폴백: 정면에서 맞은 것으로 처리
-
 	if (DamageEvent.IsOfType(FPointDamageEvent::ClassID))
 	{
 		const FPointDamageEvent& PointEvent = static_cast<const FPointDamageEvent&>(DamageEvent);
 		ImpactPoint = PointEvent.HitInfo.ImpactPoint;
-
-		if (!PointEvent.ShotDirection.IsNearlyZero())
-		{
-			ShotDirection = PointEvent.ShotDirection;
-		}
 	}
 
-	// 방어 공식 적용: 방어력을 반영한 최종 데미지를 계산한 후 AttributeComponent에 위임.
-	// DefenseStat = 0이면 CalculateMitigatedDamage가 ActualDamage를 그대로 반환한다(방어력 없을 때 패널티 없음).
-	if (AttributeComponent)
+	// 방어 공식 적용: 방어력을 반영한 최종 데미지를 계산한다(실제 차감은 아래에서 수행).
+	// DefenseStat = 0이면 CalculateMitigatedDamage가 ActualDamage를 그대로 반환한다.
+	float MitigatedDamage = ActualDamage;
+	if (IsValid(AttributeComponent))
 	{
-		const float MitigatedDamage = AttributeComponent->CalculateMitigatedDamage(ActualDamage);
+		MitigatedDamage = AttributeComponent->CalculateMitigatedDamage(ActualDamage);
+	}
+
+	// ── 블로킹(가드) 성공 판정 ──────────────────────────────────────────
+	// 조건: 블로킹 상태 + 히트 리액션 진행 중 아님 + 최소 스태미나 확보 + 공격자가 정면
+	// BlockingHit 리액션 중 재진입하면 EndDelegate가 교체되어 이전 태그 해제 콜백이 유실되므로 차단한다.
+	const bool bBlockingHitInProgress = IsValid(StateComponent)
+		&& StateComponent->HasStateTag(BWGameplayTags::Character_Action_BlockingHit.GetTag());
+
+	// 방향 판정(정면 가드 판정 + 4방향 히트 리액션)은 무기 스윙 벡터가 아니라 공격자의 실제 위치로 한다.
+	// DamageCauser(공격 캐릭터)를 우선 사용하고, 없으면 EventInstigator의 폰으로 폴백한다.
+	const AActor* Attacker = DamageCauser ? DamageCauser
+		: (EventInstigator ? EventInstigator->GetPawn() : nullptr);
+
+	if (IsBlocking()
+		&& !bBlockingHitInProgress
+		&& IsValid(AttributeComponent)
+		&& AttributeComponent->HasEnoughStamina(BlockMinStamina)
+		&& IsAttackerInFront(Attacker))
+	{
+		// 방패의 데미지 감쇄 추가 적용
+		float BlockedDamage = MitigatedDamage;
+		const ABWShield* Shield = Cast<ABWShield>(IsValid(CombatComponent) ? CombatComponent->GetEquippedShield() : nullptr);
+		if (Shield)
+		{
+			BlockedDamage = MitigatedDamage * (1.f - Shield->GetBlockDamageReduction());
+			// 가드 스태미나 소비
+			AttributeComponent->ConsumeStamina(Shield->GetGuardStaminaCost());
+		}
+
+		// 감쇄된 데미지 적용
+		AttributeComponent->ApplyDamage(BlockedDamage);
+
+		// 블로킹 히트 이펙트 및 리액션 재생 (일반 히트 경로 건너뜀)
+		PlayBlockingHitReaction(ImpactPoint);
+
+		return ActualDamage;
+	}
+
+	// ── 일반 피격 경로 ───────────────────────────────────────────────────
+	if (IsValid(AttributeComponent))
+	{
 		AttributeComponent->ApplyDamage(MitigatedDamage);
 	}
 
 	// 피격 이펙트·리액션 재생 (사망은 OnDeath 델리게이트가 별도 트리거)
 	PlayHitEffects(ImpactPoint);
-	PlayHitReaction(ShotDirection);
+	PlayHitReaction(Attacker);
 
 	return ActualDamage;
 }
@@ -440,8 +486,8 @@ void ABWPlayerCharacter::Look(const FInputActionValue& Value)
 
 void ABWPlayerCharacter::StartJump()
 {
-	// 구르기, 공격, 피격, 사망 중에는 점프를 차단한다.
-	if (IsRolling() || IsAttacking() || IsHit() || bIsDead)
+	// 구르기, 공격, 피격, 사망, 블로킹 중에는 점프를 차단한다.
+	if (IsRolling() || IsAttacking() || IsHit() || bIsDead || IsBlocking())
 	{
 		return;
 	}
@@ -459,10 +505,88 @@ bool ABWPlayerCharacter::IsHit() const
 	return IsValid(StateComponent) && StateComponent->HasStateTag(BWGameplayTags::Character_State_Hit.GetTag());
 }
 
+// ── Block(가드) 입력 콜백 ────────────────────────────────────────────────────
+
+bool ABWPlayerCharacter::CanBlock() const
+{
+	// 사망·질주·공격·피격·구르기 중이거나 방패가 손에 없으면 가드 불가.
+	if (bIsDead || bIsSprinting || IsAttacking() || IsHit() || IsRolling())
+	{
+		return false;
+	}
+
+	if (!IsValid(CombatComponent))
+	{
+		return false;
+	}
+
+	return CombatComponent->IsShieldDrawn();
+}
+
+bool ABWPlayerCharacter::IsBlocking() const
+{
+	return IsValid(StateComponent) && StateComponent->HasStateTag(BWGameplayTags::Character_State_Blocking.GetTag());
+}
+
+void ABWPlayerCharacter::BlockingStart(const FInputActionValue& /*Value*/)
+{
+	// 이미 블로킹 중이면 무시한다(중복 진입 시 SpeedBeforeBlocking이 BlockingSpeed로 오염되는 것 방지).
+	if (IsBlocking())
+	{
+		return;
+	}
+
+	if (!CanBlock())
+	{
+		return;
+	}
+
+	// Blocking 상태 태그 부착
+	if (IsValid(StateComponent))
+	{
+		StateComponent->AddStateTag(BWGameplayTags::Character_State_Blocking.GetTag());
+	}
+
+	// 이동 속도 감소 (블로킹 중 느린 이동 허용)
+	if (UCharacterMovementComponent* Movement = GetCharacterMovement())
+	{
+		SpeedBeforeBlocking = Movement->MaxWalkSpeed;
+		Movement->MaxWalkSpeed = BlockingSpeed;
+	}
+}
+
+void ABWPlayerCharacter::BlockingEnd(const FInputActionValue& /*Value*/)
+{
+	// 블로킹 상태가 아니면 무시
+	if (!IsBlocking())
+	{
+		return;
+	}
+
+	// Blocking 상태 태그 해제
+	if (IsValid(StateComponent))
+	{
+		StateComponent->RemoveStateTag(BWGameplayTags::Character_State_Blocking.GetTag());
+	}
+
+	// 이동 속도 복원
+	if (UCharacterMovementComponent* Movement = GetCharacterMovement())
+	{
+		Movement->MaxWalkSpeed = (SpeedBeforeBlocking > 0.f) ? SpeedBeforeBlocking : WalkSpeed;
+	}
+	SpeedBeforeBlocking = 0.f;
+}
+
 // ── Sprint 입력 콜백 ─────────────────────────────────────────────────────────
 
 void ABWPlayerCharacter::StartSprint(const FInputActionValue& Value)
 {
+	// 블로킹 중에는 질주 불가
+	if (IsBlocking())
+	{
+		return;
+	}
+
 	bSprintInputHeld = true;
 
 	if (CanSprint())
@@ -473,8 +597,22 @@ void ABWPlayerCharacter::StartSprint(const FInputActionValue& Value)
 
 void ABWPlayerCharacter::StopSprint(const FInputActionValue& Value)
 {
+	// 입력 유지 상태 먼저 해제 (자동 재개 누수 방지)
 	bSprintInputHeld = false;
+
+	// 블로킹 여부와 무관하게 스프린트 상태(bIsSprinting/타이머/태그)를 항상 정리한다.
+	// 입력 경합으로 bIsSprinting=true/드레인 타이머가 살아있는 경우를 방지.
 	EndSprinting();
+
+	// EndSprinting이 MaxWalkSpeed를 WalkSpeed로 복원했지만, 블로킹 중이면
+	// BlockingSpeed로 덮어써 블로킹 이동 속도를 유지한다.
+	if (IsBlocking())
+	{
+		if (UCharacterMovementComponent* Movement = GetCharacterMovement())
+		{
+			Movement->MaxWalkSpeed = BlockingSpeed;
+		}
+	}
 }
 
 // ── Sprint 상태 전이 ─────────────────────────────────────────────────────────
@@ -797,8 +935,8 @@ bool ABWPlayerCharacter::IsAttacking() const
 
 void ABWPlayerCharacter::OnAttackStarted(const FInputActionValue& /*Value*/)
 {
-	// 피격 또는 사망 중에는 공격 입력 차단
-	if (IsHit() || bIsDead)
+	// 피격, 사망, 블로킹 중에는 공격 입력 차단
+	if (IsHit() || bIsDead || IsBlocking())
 	{
 		return;
 	}
@@ -813,8 +951,8 @@ void ABWPlayerCharacter::OnAttackStarted(const FInputActionValue& /*Value*/)
 
 void ABWPlayerCharacter::OnAttackHold(const FInputActionValue& /*Value*/)
 {
-	// 피격 또는 사망 중에는 공격 입력 차단
-	if (IsHit() || bIsDead)
+	// 피격, 사망, 블로킹 중에는 공격 입력 차단
+	if (IsHit() || bIsDead || IsBlocking())
 	{
 		return;
 	}
@@ -829,8 +967,8 @@ void ABWPlayerCharacter::OnAttackHold(const FInputActionValue& /*Value*/)
 
 void ABWPlayerCharacter::OnHeavyAttack(const FInputActionValue& /*Value*/)
 {
-	// 피격 또는 사망 중에는 공격 입력 차단
-	if (IsHit() || bIsDead)
+	// 피격, 사망, 블로킹 중에는 공격 입력 차단
+	if (IsHit() || bIsDead || IsBlocking())
 	{
 		return;
 	}
@@ -843,17 +981,187 @@ void ABWPlayerCharacter::OnHeavyAttack(const FInputActionValue& /*Value*/)
 	AttackComponent->RequestAttack(EBWAttackInputKind::Heavy);
 }
 
+// ── 블로킹 히트 리액션 ───────────────────────────────────────────────────────
+
+UAnimMontage* ABWPlayerCharacter::GetBlockingHitMontage() const
+{
+	if (!IsValid(CombatComponent))
+	{
+		return nullptr;
+	}
+
+	const ABWWeapon* Weapon = Cast<ABWWeapon>(CombatComponent->GetEquippedWeapon());
+	if (!Weapon)
+	{
+		return nullptr;
+	}
+
+	UDataTable* DataTable = Weapon->GetAttackDataTable();
+	if (!DataTable)
+	{
+		return nullptr;
+	}
+
+	// bWarnIfRowMissing=false: BlockingHit 행이 없으면 몽타주 없음으로 처리(의도된 폴백).
+	const FBWAttackComboRow* Row = DataTable->FindRow<FBWAttackComboRow>(
+		BWAttackRowNames::BlockingHit,
+		TEXT("[BWPlayerCharacter] GetBlockingHitMontage"),
+		/*bWarnIfRowMissing=*/false);
+
+	if (!Row || Row->Steps.Num() == 0)
+	{
+		return nullptr;
+	}
+
+	return Row->Steps[0].Montage.Get();
+}
+
+void ABWPlayerCharacter::PlayBlockingHitReaction(const FVector& ImpactPoint)
+{
+	UAnimInstance* AnimInstance = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr;
+	if (!AnimInstance)
+	{
+		return;
+	}
+
+	UAnimMontage* BlockHitMontage = GetBlockingHitMontage();
+
+	// 블로킹 히트 이펙트·사운드는 몽타주 유무와 무관하게 항상 재생한다.
+	if (UWorld* World = GetWorld())
+	{
+		if (BlockHitVFX)
+		{
+			UGameplayStatics::SpawnEmitterAtLocation(
+				World,
+				BlockHitVFX,
+				ImpactPoint,
+				FRotator::ZeroRotator,
+				/*bAutoDestroy=*/true);
+		}
+
+		if (BlockHitSound)
+		{
+			UGameplayStatics::PlaySoundAtLocation(World, BlockHitSound, ImpactPoint);
+		}
+	}
+
+	// 블로킹 히트 몽타주 재생 — 재생이 확정될 때만 BlockingHit 태그를 부착한다.
+	if (BlockHitMontage)
+	{
+		const float MontageLength = AnimInstance->Montage_Play(BlockHitMontage);
+		if (MontageLength > 0.f)
+		{
+			// 태그 부착: 몽타주가 실제로 재생되는 경로에서만 켠다.
+			if (IsValid(StateComponent))
+			{
+				StateComponent->AddStateTag(BWGameplayTags::Character_Action_BlockingHit.GetTag());
+			}
+
+			// 종료 시 BlockingHit 태그 제거 + 입력 복원 안전망
+			FOnMontageEnded EndDelegate;
+			EndDelegate.BindUObject(this, &ABWPlayerCharacter::OnBlockingHitMontageEnded);
+			AnimInstance->Montage_SetEndDelegate(EndDelegate, BlockHitMontage);
+
+			// 가드 피격 경직 동안 모든 입력을 잠근다. 회복은 몽타주의 BlockingHitEnd 노티파이(또는 종료 안전망)가 푼다.
+			SetBlockingHitInputLocked(true);
+		}
+		// 재생 실패 시: 태그를 부착하지 않았으므로 별도 해제 불필요.
+	}
+	else
+	{
+		// 몽타주 없음 — 이펙트/사운드만 재생했으므로 태그 부착 없이 종료한다.
+		UE_LOG(LogTemp, Warning,
+			TEXT("[BWPlayerCharacter] PlayBlockingHitReaction: BlockingHit 몽타주가 설정되지 않았습니다. 무기 DataTable에 BlockingHit 행을 추가하세요."));
+	}
+}
+
+void ABWPlayerCharacter::OnBlockingHitMontageEnded(UAnimMontage* /*Montage*/, bool /*bInterrupted*/)
+{
+	// 회복 노티파이(BlockingHitEnd)가 불리지 못한 경우(누락/중단)에도 BlockingHit 상태와 입력 잠금을
+	// 확실히 해제한다(안전망). 노티파이가 이미 처리했다면 EndBlockingHit 내부 가드로 중복 복원을 막는다.
+	EndBlockingHit();
+}
+
+bool ABWPlayerCharacter::IsBlockingHit() const
+{
+	return IsValid(StateComponent) && StateComponent->HasStateTag(BWGameplayTags::Character_Action_BlockingHit.GetTag());
+}
+
+void ABWPlayerCharacter::EndBlockingHit()
+{
+	// 이미 종료되었으면(노티파이가 먼저 처리, 또는 사망 처리가 태그를 정리) 중복 복원하지 않는다.
+	// 이 가드가 입력 잠금/복원이 정확히 1쌍으로만 일어나도록 보장한다(입력 카운터 언더플로 방지).
+	if (!IsBlockingHit())
+	{
+		return;
+	}
+
+	// BlockingHit 태그 해제 → 가드 피격 경직 종료.
+	StateComponent->RemoveStateTag(BWGameplayTags::Character_Action_BlockingHit.GetTag());
+
+	// 사망 중이라면 사망 처리(EnableDeathState)가 잠근 입력을 유지해야 하므로 복원하지 않는다.
+	if (!bIsDead)
+	{
+		SetBlockingHitInputLocked(false);
+	}
+}
+
+void ABWPlayerCharacter::SetBlockingHitInputLocked(bool bLocked)
+{
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC)
+	{
+		return;
+	}
+
+	if (bLocked)
+	{
+		PC->SetIgnoreMoveInput(true);
+		PC->SetIgnoreLookInput(true);
+		DisableInput(PC);
+	}
+	else
+	{
+		EnableInput(PC);
+		PC->SetIgnoreLookInput(false);
+		PC->SetIgnoreMoveInput(false);
+	}
+}
+
+bool ABWPlayerCharacter::IsAttackerInFront(const AActor* Attacker) const
+{
+	if (!Attacker)
+	{
+		return false;
+	}
+
+	// 플레이어 → 공격자 방향 (수평 평면 투영)
+	FVector ToAttacker = Attacker->GetActorLocation() - GetActorLocation();
+	ToAttacker.Z = 0.f;
+	if (!ToAttacker.Normalize())
+	{
+		return false;
+	}
+
+	FVector Fwd = GetActorForwardVector();
+	Fwd.Z = 0.f;
+	Fwd.Normalize();
+
+	return FVector::DotProduct(Fwd, ToAttacker) >= BlockFrontDotThreshold;
+}
+
 // ── 피격 처리 (Enemy 패턴 이식) ──────────────────────────────────────────────
 
-EBWHitDirection ABWPlayerCharacter::ComputeHitDirection(const FVector& ShotDirection) const
+EBWHitDirection ABWPlayerCharacter::ComputeHitDirection(const AActor* Attacker) const
 {
-	if (ShotDirection.IsNearlyZero())
+	if (!Attacker)
 	{
 		return EBWHitDirection::Front;
 	}
 
 	// 피격자 → 공격자 방향 (수평 평면 투영)
-	FVector FromAttacker = ShotDirection;
+	// 무기 스윙 벡터가 아니라 공격자의 실제 위치를 기준으로 하므로 가로 베기 등에서도 방향을 올바르게 분류한다.
+	FVector FromAttacker = Attacker->GetActorLocation() - GetActorLocation();
 	FromAttacker.Z = 0.f;
 	if (!FromAttacker.Normalize())
 	{
@@ -892,7 +1200,7 @@ EBWHitDirection ABWPlayerCharacter::ComputeHitDirection(const FVector& ShotDirec
 	}
 }
 
-void ABWPlayerCharacter::PlayHitReaction(const FVector& ShotDirection)
+void ABWPlayerCharacter::PlayHitReaction(const AActor* Attacker)
 {
 	// 이미 사망 중이면 히트 리액션을 재생하지 않는다.
 	if (bIsDead)
@@ -906,7 +1214,7 @@ void ABWPlayerCharacter::PlayHitReaction(const FVector& ShotDirection)
 		return;
 	}
 
-	const EBWHitDirection Direction = ComputeHitDirection(ShotDirection);
+	const EBWHitDirection Direction = ComputeHitDirection(Attacker);
 
 	UAnimMontage* MontageToPlay = nullptr;
 	switch (Direction)

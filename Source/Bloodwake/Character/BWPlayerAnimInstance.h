@@ -46,6 +46,14 @@ public:
 	UFUNCTION()
 	void AnimNotify_RollEnd();
 
+	/**
+	 * 블로킹 히트(가드 피격 경직) 몽타주에 배치한 커스텀(이름 기반) AnimNotify "BlockingHitEnd"가 호출하는 함수.
+	 * 경직 회복 프레임에서 플레이어 캐릭터의 EndBlockingHit를 호출해 BlockingHit 태그 해제 및 입력 잠금 복원을 수행한다.
+	 * Enemy에서는 CachedPlayerCharacter가 null이므로 무동작(안전).
+	 */
+	UFUNCTION()
+	void AnimNotify_BlockingHitEnd();
+
 protected:
 	/**
 	 * 소유 ACharacter. NativeInitializeAnimation에서 한 번 캐시한다.
@@ -116,6 +124,14 @@ protected:
 	UPROPERTY(BlueprintReadOnly, Category = "Combat", meta = (AllowPrivateAccess = "true"))
 	EBWCombatType CurrentCombatType = EBWCombatType::MeleeFists;
 
+	/**
+	 * 블로킹(방패 가드) 중인지 여부. ABP 블로킹 포즈/레이어 전환 조건으로 사용한다.
+	 * NativeThreadSafeUpdateAnimation에서 bCachedShouldBlocking을 복사한다.
+	 * Thread-safe: 게임 스레드 캐시값만 읽는다.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Combat", meta = (AllowPrivateAccess = "true"))
+	bool bShouldBlocking = false;
+
 	/** bShouldMove 판정 기준 속도(cm/s). 이 값 이하의 미세 속도는 이동으로 보지 않는다. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Locomotion|Config", meta = (AllowPrivateAccess = "true", ClampMin = "0.0"))
 	float MovingSpeedThreshold = 3.0f;
@@ -147,6 +163,9 @@ private:
 
 	/** 플레이어 IsLockedOn 캐시. NativeUpdateAnimation(게임 스레드)에서 읽어 두는 캐시. */
 	bool bCachedIsLockedOn = false;
+
+	/** 블로킹 상태 캐시. NativeUpdateAnimation(게임 스레드)에서 IsBlocking() 값을 미리 읽어 둔다. */
+	bool bCachedShouldBlocking = false;
 
 	/**
 	 * 액터 회전 캐시. NativeUpdateAnimation(게임 스레드)에서 OwningCharacter->GetActorRotation()을 읽어 저장.
