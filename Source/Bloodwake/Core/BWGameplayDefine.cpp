@@ -25,4 +25,6 @@ namespace BWGameplayTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Character_State_Parried,       "Character.State.Parried",       "적이 패링 당함 경직 상태");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Character_Action_ParriedHit,   "Character.Action.ParriedHit",   "패링 당함 리액션 몽타주 진행 중");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Character_State_Stunned,       "Character.State.Stunned",       "적 스턴 상태 — 행동 불능");
+
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Character_State_DrinkingPotion, "Character.State.DrinkingPotion", "포션 마시기 진행 중 — 공격/방어/점프/구르기/패링 금지");
 }

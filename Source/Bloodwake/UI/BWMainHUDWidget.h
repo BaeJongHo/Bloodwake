@@ -8,6 +8,8 @@
 
 class UProgressBar;
 class UBWAttributeComponent;
+class UBWPotionInventoryComponent;
+class UBWPotionWidget;
 
 /**
  * 플레이어 메인 HUD 위젯의 C++ 베이스 클래스.
@@ -22,11 +24,12 @@ class BLOODWAKE_API UBWMainHUDWidget : public UUserWidget
 
 public:
 	/**
-	 * AttributeComponent를 구독하고 현재값으로 ProgressBar를 초기화한다.
-	 * ABWGameMode::BeginPlay에서 HUD 생성 직후 호출한다.
+	 * AttributeComponent 및 PotionInventoryComponent를 구독하고 현재값으로 위젯을 초기화한다.
+	 * ABWGameMode::InitializeHUD(다음 틱)에서 호출한다.
+	 * InPotionInventory가 null이면 포션 구독만 건너뛴다(Attribute 구독은 유지).
 	 */
 	UFUNCTION(BlueprintCallable, Category = "HUD")
-	void InitializeForPlayer(UBWAttributeComponent* InAttributes);
+	void InitializeForPlayer(UBWAttributeComponent* InAttributes, UBWPotionInventoryComponent* InPotionInventory);
 
 protected:
 	virtual void NativeConstruct() override;
@@ -43,6 +46,10 @@ protected:
 	UFUNCTION()
 	void OnFocusChangedCallback(float NewValue, float MaxValue);
 
+	/** 포션 수량 변경 시 델리게이트 콜백. PotionWidget->SetPotionQuantity 호출. */
+	UFUNCTION()
+	void OnPotionQuantityChanged(int32 InAmount);
+
 private:
 	/** ProgressBar의 퍼센트를 설정한다. MaxValue == 0이면 0으로 세팅(0-division 가드). */
 	void SetBarPercent(UProgressBar* Bar, float Value, float Max);
@@ -58,9 +65,17 @@ private:
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UProgressBar> FocusBar;
 
+	/** 포션 수량 위젯. WBP_MainHUD 자식에서 "PotionWidget" 이름으로 WBP_Potion 인스턴스를 배치해야 한다. */
+	UPROPERTY(meta = (BindWidget))
+	TObjectPtr<UBWPotionWidget> PotionWidget;
+
 	// ── 캐시 ────────────────────────────────────────────────────────
 
 	/** 구독 중인 AttributeComponent 참조. NativeDestruct에서 RemoveDynamic 정리. */
 	UPROPERTY(Transient)
 	TObjectPtr<UBWAttributeComponent> BoundAttributes;
+
+	/** 구독 중인 PotionInventoryComponent 참조. NativeDestruct에서 RemoveDynamic 정리. */
+	UPROPERTY(Transient)
+	TObjectPtr<UBWPotionInventoryComponent> BoundPotionInventory;
 };

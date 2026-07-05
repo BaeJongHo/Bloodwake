@@ -4,6 +4,8 @@
 
 #include "Components/ProgressBar.h"
 #include "Combat/BWAttributeComponent.h"
+#include "Combat/BWPotionInventoryComponent.h"
+#include "UI/BWPotionWidget.h"
 
 void UBWMainHUDWidget::NativeConstruct()
 {
@@ -22,10 +24,17 @@ void UBWMainHUDWidget::NativeDestruct()
 		BoundAttributes = nullptr;
 	}
 
+	// 포션 델리게이트 구독 해제 (댕글링 콜백 방지 — CLAUDE.md 4.3)
+	if (IsValid(BoundPotionInventory))
+	{
+		BoundPotionInventory->OnUpdatePotionAmount.RemoveDynamic(this, &UBWMainHUDWidget::OnPotionQuantityChanged);
+		BoundPotionInventory = nullptr;
+	}
+
 	Super::NativeDestruct();
 }
 
-void UBWMainHUDWidget::InitializeForPlayer(UBWAttributeComponent* InAttributes)
+void UBWMainHUDWidget::InitializeForPlayer(UBWAttributeComponent* InAttributes, UBWPotionInventoryComponent* InPotionInventory)
 {
 	if (!IsValid(InAttributes))
 	{
@@ -33,7 +42,7 @@ void UBWMainHUDWidget::InitializeForPlayer(UBWAttributeComponent* InAttributes)
 		return;
 	}
 
-	// 이전 구독이 있으면 먼저 해제
+	// 이전 Attribute 구독이 있으면 먼저 해제
 	if (IsValid(BoundAttributes))
 	{
 		BoundAttributes->OnHealthChanged.RemoveDynamic(this, &UBWMainHUDWidget::OnHealthChangedCallback);
@@ -51,6 +60,27 @@ void UBWMainHUDWidget::InitializeForPlayer(UBWAttributeComponent* InAttributes)
 	SetBarPercent(HealthBar, BoundAttributes->GetHealth(), BoundAttributes->GetMaxHealth());
 	SetBarPercent(StaminaBar, BoundAttributes->GetStamina(), BoundAttributes->GetMaxStamina());
 	SetBarPercent(FocusBar, BoundAttributes->GetFocus(), BoundAttributes->GetMaxFocus());
+
+	// ── 포션 인벤토리 구독 ──────────────────────────────────────────────
+	// 이전 포션 구독이 있으면 먼저 해제
+	if (IsValid(BoundPotionInventory))
+	{
+		BoundPotionInventory->OnUpdatePotionAmount.RemoveDynamic(this, &UBWMainHUDWidget::OnPotionQuantityChanged);
+		BoundPotionInventory = nullptr;
+	}
+
+	if (IsValid(InPotionInventory))
+	{
+		BoundPotionInventory = InPotionInventory;
+		BoundPotionInventory->OnUpdatePotionAmount.AddDynamic(this, &UBWMainHUDWidget::OnPotionQuantityChanged);
+
+		// 구독 직후 현재값으로 초기 표시를 보장한다(컴포넌트 BeginPlay 브로드캐스트 타이밍에 의존하지 않음).
+		OnPotionQuantityChanged(BoundPotionInventory->GetPotionQuantity());
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("UBWMainHUDWidget::InitializeForPlayer — InPotionInventory가 유효하지 않습니다. 포션 HUD가 갱신되지 않습니다."));
+	}
 }
 
 void UBWMainHUDWidget::OnHealthChangedCallback(float NewValue, float MaxValue)
@@ -66,6 +96,16 @@ void UBWMainHUDWidget::OnStaminaChangedCallback(float NewValue, float MaxValue)
 void UBWMainHUDWidget::OnFocusChangedCallback(float NewValue, float MaxValue)
 {
 	SetBarPercent(FocusBar, NewValue, MaxValue);
+}
+
+void UBWMainHUDWidget::OnPotionQuantityChanged(int32 InAmount)
+{
+	if (!IsValid(PotionWidget))
+	{
+		return;
+	}
+
+	PotionWidget->SetPotionQuantity(InAmount);
 }
 
 void UBWMainHUDWidget::SetBarPercent(UProgressBar* Bar, float Value, float Max)

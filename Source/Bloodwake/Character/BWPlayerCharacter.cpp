@@ -19,6 +19,7 @@
 #include "Combat/BWCombatComponent.h"
 #include "Combat/BWAttackComponent.h"
 #include "Combat/BWTargetingComponent.h"
+#include "Combat/BWPotionInventoryComponent.h"
 #include "Combat/BWAttackTypes.h"
 #include "Character/BWStateComponent.h"
 #include "Core/BWGameplayDefine.h"
@@ -74,6 +75,9 @@ ABWPlayerCharacter::ABWPlayerCharacter()
 
 	// TargetingComponent 생성·부착. 락온 타겟팅 로직을 담당한다. Tick은 기본 비활성.
 	TargetingComponent = CreateDefaultSubobject<UBWTargetingComponent>(TEXT("TargetingComponent"));
+
+	// PotionInventoryComponent 생성·부착. 포션 수량·회복·HUD 델리게이트를 담당한다.
+	PotionInventoryComponent = CreateDefaultSubobject<UBWPotionInventoryComponent>(TEXT("PotionInventoryComponent"));
 
 	// ── 기본 신체 메시 생성 ─────────────────────────────────────────
 	// 방어구 장착 시 숨기고, 해제 시 다시 표시하는 부위별 신체 파츠.
@@ -248,6 +252,12 @@ void ABWPlayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputC
 			// 패링: 버튼 누르는 순간(Started) 단발 발동.
 			EnhancedInput->BindAction(ParryAction, ETriggerEvent::Started, this, &ABWPlayerCharacter::OnParry);
 		}
+
+		if (DrinkAction)
+		{
+			// 포션 마시기: 버튼 누르는 순간(Started) 단발 발동.
+			EnhancedInput->BindAction(DrinkAction, ETriggerEvent::Started, this, &ABWPlayerCharacter::OnDrinkPotion);
+		}
 	}
 }
 
@@ -391,6 +401,12 @@ float ABWPlayerCharacter::TakeDamage(float DamageAmount, const FDamageEvent& Dam
 		AttributeComponent->ApplyDamage(MitigatedDamage);
 	}
 
+	// 포션 마시기 중 피격 시 즉시 중단(소울라이크 표준 — 피격으로 회복 취소).
+	if (IsDrinkingPotion())
+	{
+		InterruptWhileDrinkingPotion();
+	}
+
 	// 피격 이펙트·리액션 재생 (사망은 OnDeath 델리게이트가 별도 트리거)
 	PlayHitEffects(ImpactPoint);
 	PlayHitReaction(Attacker);
@@ -516,8 +532,8 @@ void ABWPlayerCharacter::Look(const FInputActionValue& Value)
 
 void ABWPlayerCharacter::StartJump()
 {
-	// 구르기, 공격, 피격, 사망, 블로킹 중에는 점프를 차단한다.
-	if (IsRolling() || IsAttacking() || IsHit() || bIsDead || IsBlocking())
+	// 구르기, 공격, 피격, 사망, 블로킹, 포션 마시기 중에는 점프를 차단한다.
+	if (IsRolling() || IsAttacking() || IsHit() || bIsDead || IsBlocking() || IsDrinkingPotion())
 	{
 		return;
 	}
@@ -539,8 +555,8 @@ bool ABWPlayerCharacter::IsHit() const
 
 bool ABWPlayerCharacter::CanBlock() const
 {
-	// 사망·질주·공격·피격·구르기 중이거나 방패가 손에 없으면 가드 불가.
-	if (bIsDead || bIsSprinting || IsAttacking() || IsHit() || IsRolling())
+	// 사망·질주·공격·피격·구르기·포션 마시기 중이거나 방패가 손에 없으면 가드 불가.
+	if (bIsDead || bIsSprinting || IsAttacking() || IsHit() || IsRolling() || IsDrinkingPotion())
 	{
 		return false;
 	}
@@ -758,8 +774,8 @@ void ABWPlayerCharacter::Roll(const FInputActionValue& Value)
 		return;
 	}
 
-	// 피격, 사망, 이미 구르는 중, 공격 중에는 중복 입력 무시.
-	if (IsHit() || bIsDead || IsRolling() || IsAttacking())
+	// 피격, 사망, 이미 구르는 중, 공격 중, 포션 마시기 중에는 중복 입력 무시.
+	if (IsHit() || bIsDead || IsRolling() || IsAttacking() || IsDrinkingPotion())
 	{
 		return;
 	}
@@ -1023,8 +1039,8 @@ bool ABWPlayerCharacter::IsAttacking() const
 
 void ABWPlayerCharacter::OnAttackStarted(const FInputActionValue& /*Value*/)
 {
-	// 피격, 사망, 블로킹, 패링(몽타주 전체 구간) 중에는 공격 입력 차단
-	if (IsHit() || bIsDead || IsBlocking() || bIsPerformingParry)
+	// 피격, 사망, 블로킹, 패링(몽타주 전체 구간), 포션 마시기 중에는 공격 입력 차단
+	if (IsHit() || bIsDead || IsBlocking() || bIsPerformingParry || IsDrinkingPotion())
 	{
 		return;
 	}
@@ -1039,8 +1055,8 @@ void ABWPlayerCharacter::OnAttackStarted(const FInputActionValue& /*Value*/)
 
 void ABWPlayerCharacter::OnAttackHold(const FInputActionValue& /*Value*/)
 {
-	// 피격, 사망, 블로킹, 패링(몽타주 전체 구간) 중에는 공격 입력 차단
-	if (IsHit() || bIsDead || IsBlocking() || bIsPerformingParry)
+	// 피격, 사망, 블로킹, 패링(몽타주 전체 구간), 포션 마시기 중에는 공격 입력 차단
+	if (IsHit() || bIsDead || IsBlocking() || bIsPerformingParry || IsDrinkingPotion())
 	{
 		return;
 	}
@@ -1055,8 +1071,8 @@ void ABWPlayerCharacter::OnAttackHold(const FInputActionValue& /*Value*/)
 
 void ABWPlayerCharacter::OnHeavyAttack(const FInputActionValue& /*Value*/)
 {
-	// 피격, 사망, 블로킹, 패링(몽타주 전체 구간) 중에는 공격 입력 차단
-	if (IsHit() || bIsDead || IsBlocking() || bIsPerformingParry)
+	// 피격, 사망, 블로킹, 패링(몽타주 전체 구간), 포션 마시기 중에는 공격 입력 차단
+	if (IsHit() || bIsDead || IsBlocking() || bIsPerformingParry || IsDrinkingPotion())
 	{
 		return;
 	}
@@ -1422,8 +1438,8 @@ bool ABWPlayerCharacter::CanParry() const
 		return false;
 	}
 
-	// 공격, 구르기, 피격, 블로킹, 블로킹 히트, 이미 패링 중 상태 차단
-	if (IsAttacking() || IsRolling() || IsHit() || IsBlocking() || IsBlockingHit() || IsParrying())
+	// 공격, 구르기, 피격, 블로킹, 블로킹 히트, 이미 패링 중, 포션 마시기 중 상태 차단
+	if (IsAttacking() || IsRolling() || IsHit() || IsBlocking() || IsBlockingHit() || IsParrying() || IsDrinkingPotion())
 	{
 		return false;
 	}
@@ -1564,5 +1580,107 @@ void ABWPlayerCharacter::EndParry()
 	if (IsValid(StateComponent))
 	{
 		StateComponent->RemoveStateTag(BWGameplayTags::Character_State_Parrying.GetTag());
+	}
+}
+
+// ── 포션 마시기 구현 ─────────────────────────────────────────────────────────
+
+bool ABWPlayerCharacter::IsDrinkingPotion() const
+{
+	return IsValid(StateComponent) && StateComponent->HasStateTag(BWGameplayTags::Character_State_DrinkingPotion.GetTag());
+}
+
+void ABWPlayerCharacter::OnDrinkPotion(const FInputActionValue& /*Value*/)
+{
+	// 상태 게이트: 사망·피격·공격·구르기·블로킹·블로킹 히트·패링·이미 포션 마시기 중이면 차단.
+	if (bIsDead || IsHit() || IsAttacking() || IsRolling() || IsBlocking() || IsBlockingHit() || IsParrying() || bIsPerformingParry || IsDrinkingPotion())
+	{
+		return;
+	}
+
+	// 포션 인벤토리 유효성 및 수량 확인.
+	if (!IsValid(PotionInventoryComponent) || !PotionInventoryComponent->CanDrink())
+	{
+		return;
+	}
+
+	// 몽타주 없으면 상태 갇힘 방지를 위해 진행하지 않는다(Roll의 RollMontage 가드와 동일).
+	if (!DrinkMontage)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[BWPlayerCharacter] OnDrinkPotion: DrinkMontage가 설정되지 않아 포션 마시기를 재생할 수 없습니다. BP 자식에서 DrinkMontage를 지정하세요."));
+		return;
+	}
+
+	// DrinkingPotion 상태 태그 부착 (Normal 자동 해제 — BWStateComponent 동작).
+	if (IsValid(StateComponent))
+	{
+		StateComponent->AddStateTag(BWGameplayTags::Character_State_DrinkingPotion.GetTag());
+	}
+
+	// 포션 마시기 몽타주 재생.
+	UAnimInstance* AnimInstance = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr;
+	if (!AnimInstance)
+	{
+		// AnimInstance 없음 — 태그 즉시 해제(상태 갇힘 방지).
+		if (IsValid(StateComponent))
+		{
+			StateComponent->RemoveStateTag(BWGameplayTags::Character_State_DrinkingPotion.GetTag());
+		}
+		return;
+	}
+
+	const float MontageLength = AnimInstance->Montage_Play(DrinkMontage);
+	if (MontageLength > 0.f)
+	{
+		// 종료 안전망 바인딩 — 노티파이 누락/중단 시에도 태그 해제 + 디스폰 보장.
+		FOnMontageEnded EndDelegate;
+		EndDelegate.BindUObject(this, &ABWPlayerCharacter::OnDrinkMontageEnded);
+		AnimInstance->Montage_SetEndDelegate(EndDelegate, DrinkMontage);
+	}
+	else
+	{
+		// 몽타주 재생 실패 — 태그 즉시 해제(상태 갇힘 방지). Roll의 폴백과 동일.
+		if (IsValid(StateComponent))
+		{
+			StateComponent->RemoveStateTag(BWGameplayTags::Character_State_DrinkingPotion.GetTag());
+		}
+	}
+}
+
+void ABWPlayerCharacter::InterruptWhileDrinkingPotion()
+{
+	// DrinkingPotion 태그 해제.
+	if (IsValid(StateComponent))
+	{
+		StateComponent->RemoveStateTag(BWGameplayTags::Character_State_DrinkingPotion.GetTag());
+	}
+
+	// 진행 중인 DrinkMontage 정지.
+	UAnimInstance* AnimInstance = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr;
+	if (AnimInstance && DrinkMontage)
+	{
+		AnimInstance->Montage_Stop(0.1f, DrinkMontage);
+	}
+
+	// 포션 액터 디스폰 (노티파이 누락/중단 시 손에 포션이 남는 것 방지).
+	if (IsValid(PotionInventoryComponent))
+	{
+		PotionInventoryComponent->DespawnPotion();
+	}
+}
+
+void ABWPlayerCharacter::OnDrinkMontageEnded(UAnimMontage* /*Montage*/, bool /*bInterrupted*/)
+{
+	// 정상 종료든 중단이든 DrinkingPotion 상태를 확실히 해제하고 포션을 디스폰한다(이중 안전망).
+	// 중복 호출은 StateComponent 태그 제거(이미 없으면 무동작)와 DespawnPotion(이미 null이면 무동작)으로 무해하다.
+	if (IsValid(StateComponent))
+	{
+		StateComponent->RemoveStateTag(BWGameplayTags::Character_State_DrinkingPotion.GetTag());
+	}
+
+	if (IsValid(PotionInventoryComponent))
+	{
+		PotionInventoryComponent->DespawnPotion();
 	}
 }

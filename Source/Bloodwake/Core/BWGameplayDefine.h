@@ -51,4 +51,7 @@ namespace BWGameplayTags
 
 	/** 스턴(Stunned) 상태 태그. 적이 피격 후 확률적 스턴 상태에 빠진 것을 나타낸다. 문자열: "Character.State.Stunned" */
 	BLOODWAKE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Character_State_Stunned);
+
+	/** 포션 마시기(DrinkingPotion) 상태 태그. 포션 마시기 몽타주 진행 중 — 공격/방어/점프/구르기/패링 금지. 문자열: "Character.State.DrinkingPotion" */
+	BLOODWAKE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Character_State_DrinkingPotion);
 }

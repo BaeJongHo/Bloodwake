@@ -20,6 +20,7 @@ class UBWStateComponent;
 class UBWCombatComponent;
 class UBWAttackComponent;
 class UBWTargetingComponent;
+class UBWPotionInventoryComponent;
 class USkeletalMeshComponent;
 class UAnimMontage;
 class UParticleSystem;
@@ -71,6 +72,18 @@ public:
 	/** AttributeComponent 접근자. GameMode 등 외부에서 FindComponentByClass 우회 없이 접근하기 위해 제공. */
 	UFUNCTION(BlueprintPure, Category = "Attributes")
 	UBWAttributeComponent* GetAttributeComponent() const { return AttributeComponent; }
+
+	/** PotionInventoryComponent 접근자. GameMode에서 HUD 델리게이트 배선에 사용한다. */
+	UFUNCTION(BlueprintPure, Category = "Combat")
+	UBWPotionInventoryComponent* GetPotionInventoryComponent() const { return PotionInventoryComponent; }
+
+	/**
+	 * 포션 마시기 진행 중 피격 시 중단 처리.
+	 * Character.State.DrinkingPotion 태그 해제 + DrinkMontage 정지 + PotionActor 디스폰.
+	 * 태그가 없을 때 호출해도 무해(안전 중복 호출 허용).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Combat|Potion")
+	void InterruptWhileDrinkingPotion();
 
 	/**
 	 * 방어구 부위에 대응하는 기본 신체 메시의 가시성을 토글한다.
@@ -267,6 +280,20 @@ protected:
 	UFUNCTION(BlueprintPure, Category = "Combat")
 	bool IsHit() const;
 
+	/**
+	 * 현재 포션 마시기(Character.State.DrinkingPotion) 상태인지 확인한다.
+	 * 공격/방어/점프/구르기/패링 차단 게이트에 사용한다.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Combat|Potion")
+	bool IsDrinkingPotion() const;
+
+	/**
+	 * DrinkAction(IA_Drink) 입력 콜백.
+	 * 상태 게이트 확인 후 DrinkMontage를 재생하고 DrinkingPotion 태그를 부착한다.
+	 * 실제 회복·스폰은 몽타주 노티파이가 담당한다.
+	 */
+	void OnDrinkPotion(const FInputActionValue& Value);
+
 	// ── Sprint / Roll 입력 콜백 ─────────────────────────────────────
 
 	/**
@@ -408,6 +435,10 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> ParryAction;
 
+	/** 포션 마시기 입력 액션. BP 자식에서 IA_Drink 에셋을 지정한다. */
+	UPROPERTY(EditAnywhere, Category = "Input")
+	TObjectPtr<UInputAction> DrinkAction;
+
 	// ── 컴포넌트 ────────────────────────────────────────────────────
 
 	/** Health / Stamina / Focus 자원 관리 컴포넌트. */
@@ -433,6 +464,10 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat")
 	TObjectPtr<UBWTargetingComponent> TargetingComponent;
 
+	/** 포션 인벤토리 컴포넌트. 수량·회복·스폰·HUD 델리게이트를 담당한다. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat")
+	TObjectPtr<UBWPotionInventoryComponent> PotionInventoryComponent;
+
 	// ── 인터랙션 튜닝 데이터 (BP 자식에서 설정) ─────────────────────
 
 	/** 구체 트레이스 반경(cm). BP 자식에서 튜닝한다. */
@@ -456,6 +491,10 @@ protected:
 	/** 회피(Roll) 시 재생할 몽타주. BP 자식에서 AM_ 회피 몽타주를 지정한다. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Roll")
 	TObjectPtr<UAnimMontage> RollMontage;
+
+	/** 포션 마시기 몽타주. BP 자식에서 AM_DrinkPotion을 지정한다. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Player|Potion")
+	TObjectPtr<UAnimMontage> DrinkMontage;
 
 	// ── Block(가드) 데이터 (BP 자식에서 설정) ────────────────────────
 
@@ -614,6 +653,12 @@ private:
 	 * CanParry에서 이 값이 true이면 재발동을 차단해 "한 번만 발동"을 보장한다.
 	 */
 	bool bIsPerformingParry = false;
+
+	/**
+	 * DrinkMontage 종료 안전망 콜백(Montage_SetEndDelegate 바인딩).
+	 * 노티파이 누락·중단 시에도 DrinkingPotion 태그 해제 + 포션 디스폰을 보장한다(중복 호출 무해).
+	 */
+	void OnDrinkMontageEnded(UAnimMontage* Montage, bool bInterrupted);
 
 	/**
 	 * 현재 플레이어가 입력 중인 이동 방향(수평 월드 벡터, 정규화)을 반환한다.
