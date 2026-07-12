@@ -140,45 +140,60 @@ void UBWWeaponCollisionComponent::PerformSweep()
 	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(WeaponCollisionSweep), /*bTraceComplex=*/false);
 	QueryParams.AddIgnoredActors(ActorsToIgnore);
 
-	// 이전 프레임 위치 → 현재 프레임 위치 보간 Sweep (관통 방지)
-	TArray<FHitResult> HitResults;
-	World->SweepMultiByChannel(
-		HitResults,
-		PrevStartLocation,
-		CurrStartLocation,
-		FQuat::Identity,
-		TraceChannel,
-		FCollisionShape::MakeSphere(SourceRadius),
-		QueryParams
-	);
+	// ── 블레이드 전체 길이를 따라 다중 지점 Sweep ──────────────────────────────
+	// 기존에는 Start·End 두 소켓의 이동 경로만 각각 sweep했다. 그 결과 두 소켓 "사이"(자루·칼몸)
+	// 구간은 판정이 비어, 창·폴암처럼 Start~End 간격이 큰 무기는 중간에 맞아도 감지되지 않았다.
+	// → Start~End 선분을 반경 간격으로 샘플링해 각 지점의 prev→curr를 sweep한다.
+	//   각 지점이 자기 prev→curr를 보간하므로 블레이드 길이(공간)와 프레임 이동(시간)을 모두 커버한다.
+	const float BladeLength = FVector::Dist(CurrStartLocation, CurrEndLocation);
 
-	// 맨손 모드는 Start==End이므로 두 번째 sweep은 불필요하다.
-	// 무기 모드는 끝 소켓(칼끝)도 sweep해 선단 관통을 방지한다.
-	if (SourceStartSocket != SourceEndSocket)
+	int32 NumSamples;
+	if (BladeLength <= KINDA_SMALL_NUMBER)
 	{
-		TArray<FHitResult> HitResultsEnd;
+		// Start==End(맨손 등 단일 점) — 1지점만 sweep.
+		NumSamples = 1;
+	}
+	else
+	{
+		// 인접 구체가 겹치도록 반경 간격으로 나눈다(+1 = 양 끝 포함). MaxSweepSamples로 상한.
+		const float Spacing = FMath::Max(SourceRadius, 1.f);
+		NumSamples = FMath::Clamp(FMath::CeilToInt(BladeLength / Spacing) + 1, 2, MaxSweepSamples);
+	}
+
+	TArray<FHitResult> HitResults;
+	const FCollisionShape SweepSphere = FCollisionShape::MakeSphere(SourceRadius);
+	for (int32 i = 0; i < NumSamples; ++i)
+	{
+		// 선분 상 위치 비율 T: 0=Start, 1=End. 각 지점의 이전→현재 위치를 보간해 sweep한다.
+		const float T = (NumSamples > 1) ? static_cast<float>(i) / static_cast<float>(NumSamples - 1) : 0.f;
+		const FVector PrevPoint = FMath::Lerp(PrevStartLocation, PrevEndLocation, T);
+		const FVector CurrPoint = FMath::Lerp(CurrStartLocation, CurrEndLocation, T);
+
+		TArray<FHitResult> SampleHits;
 		World->SweepMultiByChannel(
-			HitResultsEnd,
-			PrevEndLocation,
-			CurrEndLocation,
+			SampleHits,
+			PrevPoint,
+			CurrPoint,
 			FQuat::Identity,
 			TraceChannel,
-			FCollisionShape::MakeSphere(SourceRadius),
+			SweepSphere,
 			QueryParams
 		);
-		HitResults.Append(HitResultsEnd);
+		HitResults.Append(SampleHits);
 	}
 
 #if ENABLE_DRAW_DEBUG
 	if (bDrawDebug)
 	{
-		DrawDebugLine(World, PrevStartLocation, CurrStartLocation, FColor::Red, false, 1.f, 0, 2.f);
+		// 현재 블레이드 선분(초록) + 양 끝 이동(빨강/주황) + 끝점 구체를 표시한다.
+		DrawDebugLine(World, CurrStartLocation, CurrEndLocation, FColor::Green, false, 1.f, 0, 2.f);
+		DrawDebugLine(World, PrevStartLocation, CurrStartLocation, FColor::Red, false, 1.f, 0, 1.5f);
+		DrawDebugSphere(World, CurrStartLocation, SourceRadius, 8, FColor::Red, false, 1.f);
 		if (SourceStartSocket != SourceEndSocket)
 		{
-			DrawDebugLine(World, PrevEndLocation, CurrEndLocation, FColor::Orange, false, 1.f, 0, 2.f);
+			DrawDebugLine(World, PrevEndLocation, CurrEndLocation, FColor::Orange, false, 1.f, 0, 1.5f);
 			DrawDebugSphere(World, CurrEndLocation, SourceRadius, 8, FColor::Orange, false, 1.f);
 		}
-		DrawDebugSphere(World, CurrStartLocation, SourceRadius, 8, FColor::Red, false, 1.f);
 	}
 #endif
 

@@ -13,8 +13,10 @@ class ABWWeapon;
 
 /**
  * 캐릭터(UBWCombatComponent)가 소유하는 히트 판정 컴포넌트.
- * 감지 ON 동안(StartDetection~StopDetection) 매 틱 sweep 소스(무기 소켓 또는 손 본)를 CapsuleSweep 하여
+ * 감지 ON 동안(StartDetection~StopDetection) 매 틱 sweep 소스(무기 소켓 또는 손 본)의
+ * Start~End 선분을 여러 지점으로 샘플링해 각 지점의 이전→현재 위치를 구체 sweep 하여
  * 피격 액터를 검출하고 TakeDamage(FPointDamageEvent)로 데미지를 전달한다.
+ * (Start·End 두 끝점만 sweep하면 창·폴암처럼 소켓 간격이 큰 무기는 그 "사이" 구간이 비어 헛맞는다.)
  * 한 감지 윈도우 내 동일 액터 중복 타격을 방지(AlreadyHitActors 캐시).
  * 히트 윈도우 제어는 UBWAnimNotifyState_WeaponCollision이 담당한다.
  *
@@ -81,6 +83,14 @@ public:
 	/** Sweep 충돌 채널. 적 캡슐이 반응하는 채널로 설정한다(기본 ECC_Pawn). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "WeaponCollision|Trace")
 	TEnumAsByte<ECollisionChannel> TraceChannel = ECC_Pawn;
+
+	/**
+	 * 블레이드(Start~End)를 따라 sweep할 최대 샘플 지점 수(성능 상한).
+	 * 실제 지점 수는 블레이드 길이 / 반경으로 계산되며, 이 값을 넘지 않도록 클램프된다.
+	 * 긴 무기(창·폴암)일수록 지점이 많아지므로 상한으로 스윕 폭주를 방지한다.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "WeaponCollision|Trace", meta = (ClampMin = "2", ClampMax = "64"))
+	int32 MaxSweepSamples = 24;
 
 	/** true이면 매 Sweep 캡슐을 디버그 라인으로 그린다(개발 확인용). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "WeaponCollision|Debug")
