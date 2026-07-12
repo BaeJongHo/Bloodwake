@@ -66,6 +66,13 @@ public:
 	void SetEquippedPhysicsState();
 
 	/**
+	 * 캐릭터에서 분리하고 메시 물리·충돌을 켜 바닥으로 떨어뜨린다(사망 시 무기 드롭).
+	 * SetEquippedPhysicsState의 역동작 — DetachFromActor 후 물리 시뮬레이션을 활성화한다.
+	 * @param CollisionProfileName 드롭 후 적용할 충돌 프로파일명(예: "PhysicsActor").
+	 */
+	void DropFromCharacter(FName CollisionProfileName);
+
+	/**
 	 * 이 장비가 속하는 슬롯을 반환한다.
 	 * 베이스는 None을 반환. ABWWeapon은 Weapon, ABWShield는 Shield, ABWArmour는 Armour를 반환한다.
 	 * CombatComponent가 슬롯 라우팅에 사용한다.

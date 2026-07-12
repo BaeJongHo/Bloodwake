@@ -169,9 +169,16 @@ void ABWEnemyAIController::UpdateTarget()
 
 	// 인지된 액터 중 첫 번째 ABWPlayerCharacter를 추격 대상으로 삼는다.
 	// 단, 사망한 플레이어는 추격/공격 대상에서 제외한다.
+	const APawn* SelfPawn = GetPawn();
 	ABWPlayerCharacter* SightPlayer = nullptr;
 	for (AActor* Actor : PerceivedActors)
 	{
+		// 자기 자신은 타깃 후보에서 원천 제외한다(자기 감지 → 제자리 공격 방지 방어 가드).
+		if (Actor == SelfPawn)
+		{
+			continue;
+		}
+
 		if (ABWPlayerCharacter* Player = Cast<ABWPlayerCharacter>(Actor))
 		{
 			if (Player->IsDead())

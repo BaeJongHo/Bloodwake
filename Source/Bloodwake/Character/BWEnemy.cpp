@@ -132,7 +132,7 @@ FVector ABWEnemy::GetTargetFocusLocation() const
 
 // ── IBWCombatInterface 구현 ───────────────────────────────────────────────────
 
-void ABWEnemy::PerformAttack(FOnMontageEnded OnEnded)
+void ABWEnemy::PerformAttack(EBWAttackType AttackType, FOnMontageEnded OnEnded)
 {
 	// 1) Dead 가드 — 사망한 적은 공격 불가
 	if (bIsDead)
@@ -155,52 +155,60 @@ void ABWEnemy::PerformAttack(FOnMontageEnded OnEnded)
 		return;
 	}
 
-	// 3) DataTable 유효성 검사
-	if (!EnemyAttackDataTable)
+	// 3) 공격 DataTable 결정 — 장착 무기(ABWWeapon)의 AttackDataTable을 우선 사용하고,
+	//    무기가 없거나 테이블 미지정이면 EnemyAttackDataTable로 폴백한다.
+	//    → 무기의 CombatType(TwoHanded 등)에 맞는 몽타주 세트가 자동으로 선택된다(무기 주도).
+	UDataTable* AttackTable = nullptr;
+	if (IsValid(CombatComponent))
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[BWEnemy] PerformAttack: EnemyAttackDataTable이 설정되지 않았습니다. (%s)"), *GetName());
+		if (const ABWWeapon* EquippedWeapon = Cast<ABWWeapon>(CombatComponent->GetEquippedWeapon()))
+		{
+			AttackTable = EquippedWeapon->GetAttackDataTable();
+		}
+	}
+	if (!AttackTable)
+	{
+		AttackTable = EnemyAttackDataTable;
+	}
+	if (!AttackTable)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[BWEnemy] PerformAttack: 사용할 공격 DataTable이 없습니다(무기·EnemyAttackDataTable 모두 미설정). (%s)"), *GetName());
 		OnEnded.ExecuteIfBound(nullptr, true);
 		return;
 	}
 
-	// 4) DataTable에서 모든 행의 모든 Step을 풀로 모아 랜덤 선택
-	//    공격 DataTable의 모든 행(Light/Running/Special/Heavy)에서 Step을 수집한다.
-	//    Equip/Unequip 행은 스태미나 소모 없이 재생하면 안 되므로 제외한다.
-	TArray<FBWComboStep> AllSteps;
-
-	const TArray<FName>& RowNames = EnemyAttackDataTable->GetRowNames();
-	for (const FName& RowName : RowNames)
+	// 4) 요청받은 공격 타입(BT의 BW Perform Attack 노드가 지정)에 해당하는 행을 조회한다.
+	const FName RowName = GetAttackRowName(AttackType);
+	const FBWAttackComboRow* Row = AttackTable->FindRow<FBWAttackComboRow>(RowName, TEXT("BWEnemy::PerformAttack"));
+	if (!Row)
 	{
-		// 공격 아닌 특수 행(Equip/Unequip/BlockingHit/Parrying/ParriedHit) 제외
-		if (RowName == TEXT("Equip") || RowName == TEXT("Unequip")
-			|| RowName == TEXT("BlockingHit") || RowName == TEXT("Parrying") || RowName == TEXT("ParriedHit"))
-		{
-			continue;
-		}
+		UE_LOG(LogTemp, Warning, TEXT("[BWEnemy] PerformAttack: 공격 DataTable에 '%s' 행이 없습니다. (%s)"), *RowName.ToString(), *GetName());
+		OnEnded.ExecuteIfBound(nullptr, true);
+		return;
+	}
 
-		const FBWAttackComboRow* Row = EnemyAttackDataTable->FindRow<FBWAttackComboRow>(RowName, TEXT("BWEnemy::PerformAttack"));
-		if (Row)
+	// 해당 행의 유효한(몽타주가 지정된) Step만 모아 랜덤 선택한다.
+	//    Step이 1개면 결정적으로 그 공격을, 여러 개(콤보)면 변주를 준다.
+	TArray<FBWComboStep> ValidSteps;
+	ValidSteps.Reserve(Row->Steps.Num());
+	for (const FBWComboStep& Step : Row->Steps)
+	{
+		if (Step.Montage)
 		{
-			for (const FBWComboStep& Step : Row->Steps)
-			{
-				if (Step.Montage)
-				{
-					AllSteps.Add(Step);
-				}
-			}
+			ValidSteps.Add(Step);
 		}
 	}
 
-	if (AllSteps.Num() == 0)
+	if (ValidSteps.Num() == 0)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[BWEnemy] PerformAttack: EnemyAttackDataTable에 재생 가능한 몽타주 Step이 없습니다. (%s)"), *GetName());
+		UE_LOG(LogTemp, Warning, TEXT("[BWEnemy] PerformAttack: '%s' 행에 재생 가능한 몽타주 Step이 없습니다. (%s)"), *RowName.ToString(), *GetName());
 		OnEnded.ExecuteIfBound(nullptr, true);
 		return;
 	}
 
 	// 랜덤 Step 선택
-	const int32 RandIndex = FMath::RandRange(0, AllSteps.Num() - 1);
-	const FBWComboStep& SelectedStep = AllSteps[RandIndex];
+	const int32 RandIndex = FMath::RandRange(0, ValidSteps.Num() - 1);
+	const FBWComboStep& SelectedStep = ValidSteps[RandIndex];
 
 	// 5) 스태미나 체크 — 부족하면 OnEnded 즉시 호출로 BT Latent 교착 방지
 	if (IsValid(AttributeComponent) && !AttributeComponent->HasEnoughStamina(SelectedStep.StaminaCost))

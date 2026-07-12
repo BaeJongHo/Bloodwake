@@ -75,3 +75,19 @@ void ABWEquipItem::SetEquippedPhysicsState()
 	MeshComponent->SetSimulatePhysics(false);
 	MeshComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 }
+
+void ABWEquipItem::DropFromCharacter(FName CollisionProfileName)
+{
+	if (!MeshComponent)
+	{
+		return;
+	}
+
+	// 캐릭터 계층에서 분리해 독립 액터로 만든다.
+	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+
+	// 물리 시뮬레이션 활성화 — 콜리전 프로파일 설정 → 충돌 활성화 → 시뮬레이션 시작 순서 준수.
+	MeshComponent->SetCollisionProfileName(CollisionProfileName);
+	MeshComponent->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	MeshComponent->SetSimulatePhysics(true);
+}

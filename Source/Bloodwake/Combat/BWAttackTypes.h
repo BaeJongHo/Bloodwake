@@ -22,6 +22,23 @@ enum class EBWAttackType : uint8
 };
 
 /**
+ * EBWAttackType → DataTable RowName 매핑 공용 헬퍼.
+ * enum 이름과 동일한 FName을 반환한다(예: Light → "Light").
+ * ABWEnemy::PerformAttack / UBWAttackComponent가 공격 타입에 해당하는 행을 조회할 때 사용한다.
+ */
+inline FName GetAttackRowName(EBWAttackType Type)
+{
+	switch (Type)
+	{
+	case EBWAttackType::Light:   return FName(TEXT("Light"));
+	case EBWAttackType::Running: return FName(TEXT("Running"));
+	case EBWAttackType::Special: return FName(TEXT("Special"));
+	case EBWAttackType::Heavy:   return FName(TEXT("Heavy"));
+	default:                     return NAME_None;
+	}
+}
+
+/**
  * 입력 진입점에서 받는 입력 종류.
  * IA_Attack(PrimaryTap/PrimaryHold)과 IA_HeavyAttack(Heavy)을 구분한다.
  */

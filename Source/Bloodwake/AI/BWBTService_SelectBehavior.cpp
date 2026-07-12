@@ -93,27 +93,25 @@ void UBWBTService_SelectBehavior::UpdateBehavior(UBehaviorTreeComponent& OwnerCo
 	UObject* TargetObject = BB->GetValueAsObject(TargetKey.SelectedKeyName);
 	AActor* TargetActor = Cast<AActor>(TargetObject);
 
-	// ── 순찰점 존재 여부 — BWBTTask_Patrol과 동일 기준(Num() > 0) ───────────────
-	const bool bHasPatrol = Enemy->GetPatrolPoints().Num() > 0;
+	// ── 행동 결정 — 파생 클래스에서 DecideBehavior를 override해 정책을 교체할 수 있다. ──
+	const EBWAIBehavior Behavior = DecideBehavior(*Enemy, TargetActor);
+	SetBehaviorKey(BB, Behavior);
+}
 
-	// ── 행동 결정 분기 ────────────────────────────────────────────────────────
-	EBWAIBehavior Behavior = EBWAIBehavior::Idle;
+EBWAIBehavior UBWBTService_SelectBehavior::DecideBehavior(ABWEnemy& Enemy, AActor* TargetActor) const
+{
+	// 순찰점 존재 여부 — BWBTTask_Patrol과 동일 기준(Num() > 0)
+	const bool bHasPatrol = Enemy.GetPatrolPoints().Num() > 0;
 
 	if (TargetActor == nullptr)
 	{
 		// 타깃 없음 — 순찰점 유무로 Idle/Patrol 분기
-		Behavior = bHasPatrol ? EBWAIBehavior::Patrol : EBWAIBehavior::Idle;
-	}
-	else
-	{
-		// 타깃 있음 — 거리 비교로 Approach/MeleeAttack 분기
-		const float DistSq = FVector::DistSquared(
-			Enemy->GetActorLocation(), TargetActor->GetActorLocation());
-		const bool bInRange = DistSq <= FMath::Square(AttackRangeDistance);
-		Behavior = bInRange ? EBWAIBehavior::MeleeAttack : EBWAIBehavior::Approach;
+		return bHasPatrol ? EBWAIBehavior::Patrol : EBWAIBehavior::Idle;
 	}
 
-	SetBehaviorKey(BB, Behavior);
+	// 타깃 있음 — 거리 비교로 Approach/MeleeAttack 분기
+	const float DistSq = FVector::DistSquared(Enemy.GetActorLocation(), TargetActor->GetActorLocation());
+	return (DistSq <= FMath::Square(AttackRangeDistance)) ? EBWAIBehavior::MeleeAttack : EBWAIBehavior::Approach;
 }
 
 void UBWBTService_SelectBehavior::SetBehaviorKey(UBlackboardComponent* Comp, EBWAIBehavior Behavior)

@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "BehaviorTree/BTTaskNode.h"
+#include "Combat/BWAttackTypes.h"
 #include "BWBTTask_PerformAttack.generated.h"
 
 /**
@@ -38,4 +39,21 @@ public:
 	{
 		FinishLatentTask(OwnerComp, Result);
 	}
+
+protected:
+	/**
+	 * 이 노드가 재생할 공격 종류. BT 에디터 노드 디테일에서 지정한다(Light/Heavy/Special 등).
+	 * ABWEnemy::PerformAttack이 이 타입에 해당하는 DataTable 행에서 몽타주를 선택한다.
+	 * 같은 BW Perform Attack 태스크를 타입만 다르게 여러 노드로 배치해 패턴을 구성할 수 있다.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Attack")
+	EBWAttackType AttackType = EBWAttackType::Light;
+
+	/**
+	 * 공격 진입 직전 타깃이 없으면 이 키에 EBWAIBehavior::Idle을 기록한다(헛공격 방지 방어 로직).
+	 * BT 노드 디테일 패널에서 BB_Enemy의 Behavior 키를 지정한다.
+	 * 생성자에서 EBWAIBehavior 타입 필터를 등록해 Enum 키만 표시한다.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Blackboard")
+	FBlackboardKeySelector BehaviorKey;
 };

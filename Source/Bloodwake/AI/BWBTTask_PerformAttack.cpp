@@ -4,6 +4,7 @@
 
 #include "AIController.h"
 #include "BehaviorTree/BehaviorTreeComponent.h"
+#include "BehaviorTree/BlackboardComponent.h"
 #include "Animation/AnimInstance.h"
 #include "GameFramework/Character.h"
 #include "Character/BWEnemy.h"
@@ -11,6 +12,7 @@
 #include "Combat/BWCombatInterface.h"
 #include "Core/BWGameplayDefine.h"
 #include "AI/BWAILog.h"
+#include "AI/BWAITypes.h"
 #include "AI/BWEnemyAIController.h"
 
 UBWBTTask_PerformAttack::UBWBTTask_PerformAttack()
@@ -20,6 +22,12 @@ UBWBTTask_PerformAttack::UBWBTTask_PerformAttack()
 
 	// Latent 태스크 — InProgress 반환 후 FinishLatentTask로 완료를 통지한다.
 	bNotifyTaskFinished = true;
+
+	// BehaviorKey: EBWAIBehavior 타입 Enum 키만 선택 가능하도록 필터를 건다.
+	BehaviorKey.AddEnumFilter(
+		this,
+		GET_MEMBER_NAME_CHECKED(UBWBTTask_PerformAttack, BehaviorKey),
+		StaticEnum<EBWAIBehavior>());
 }
 
 EBTNodeResult::Type UBWBTTask_PerformAttack::ExecuteTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory)
@@ -50,22 +58,48 @@ EBTNodeResult::Type UBWBTTask_PerformAttack::ExecuteTask(UBehaviorTreeComponent&
 		return EBTNodeResult::Failed;
 	}
 
+	// ── 타깃 방어 체크 ────────────────────────────────────────────────────────
+	// 공격 태스크가 타깃 없이 실행되는 것을 원천 차단한다(타깃 없는 헛공격 방지).
+	// 서비스가 Behavior를 잘못 갱신하거나 스테일 키로 이 태스크에 진입한 경우에도,
+	// 실제 Target(SSOT)이 없으면 공격하지 않고 Behavior를 Idle로 되돌린 뒤 실패를 반환한다.
+	AActor* CurrentTarget = nullptr;
+	if (ABWEnemyAIController* EnemyAI = Cast<ABWEnemyAIController>(AIController))
+	{
+		CurrentTarget = EnemyAI->GetCurrentTarget();
+	}
+	if (!CurrentTarget)
+	{
+		if (UBlackboardComponent* BB = OwnerComp.GetBlackboardComponent())
+		{
+			BB->SetValueAsEnum(BehaviorKey.SelectedKeyName, static_cast<uint8>(EBWAIBehavior::Idle));
+		}
+		UE_LOG(LogBWAI, Verbose,
+			TEXT("[BWBTTask_PerformAttack] 타깃이 없어 공격을 취소하고 Behavior를 Idle로 설정합니다. (%s)"),
+			*Enemy->GetName());
+		return EBTNodeResult::Failed;
+	}
+
 	// ── 공격 직전 타깃 조준 회전 ──────────────────────────────────────────────
 	// 적은 bOrientRotationToMovement=true(이동 방향으로만 회전)라, 사거리에서 멈춰 공격하면
 	// 플레이어를 향하지 않아 헛스윙한다. 공격 커밋 직전 yaw를 타깃 쪽으로 즉시 정렬해
 	// "플레이어를 바라본 상태로 공격"을 보장한다(소울라이크식 조준 후 커밋).
-	if (ABWEnemyAIController* EnemyAI = Cast<ABWEnemyAIController>(AIController))
+	// 보스(ShouldFaceTargetBeforeAttack == false)는 이 스냅 회전을 건너뛴다 —
+	// RotateToTarget AnimNotifyState가 windup 동안 부드럽게 회전을 담당하기 때문이다.
+	if (Enemy->ShouldFaceTargetBeforeAttack())
 	{
-		if (const AActor* Target = EnemyAI->GetCurrentTarget())
+		if (ABWEnemyAIController* EnemyAI = Cast<ABWEnemyAIController>(AIController))
 		{
-			FVector ToTarget = Target->GetActorLocation() - Enemy->GetActorLocation();
-			ToTarget.Z = 0.f;
-			if (!ToTarget.IsNearlyZero())
+			if (const AActor* Target = EnemyAI->GetCurrentTarget())
 			{
-				FRotator FaceRotation = ToTarget.Rotation();
-				FaceRotation.Pitch = 0.f;
-				FaceRotation.Roll = 0.f;
-				Enemy->SetActorRotation(FaceRotation);
+				FVector ToTarget = Target->GetActorLocation() - Enemy->GetActorLocation();
+				ToTarget.Z = 0.f;
+				if (!ToTarget.IsNearlyZero())
+				{
+					FRotator FaceRotation = ToTarget.Rotation();
+					FaceRotation.Pitch = 0.f;
+					FaceRotation.Roll = 0.f;
+					Enemy->SetActorRotation(FaceRotation);
+				}
 			}
 		}
 	}
@@ -98,8 +132,9 @@ EBTNodeResult::Type UBWBTTask_PerformAttack::ExecuteTask(UBehaviorTreeComponent&
 	});
 
 	// ── PerformAttack 호출 ────────────────────────────────────────────────────
+	// AttackType(BT 노드에서 지정)에 해당하는 공격을 재생한다.
 	// OnEnded는 로컬 변수이므로 이동 시멘틱으로 전달한다(복사 비용 최소화).
-	CombatActor->PerformAttack(MoveTemp(OnEnded));
+	CombatActor->PerformAttack(AttackType, MoveTemp(OnEnded));
 
 	// Latent 태스크 — 몽타주 종료 콜백이 완료를 통지할 때까지 InProgress 상태 유지.
 	return EBTNodeResult::InProgress;

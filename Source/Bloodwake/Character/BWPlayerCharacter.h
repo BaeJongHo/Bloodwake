@@ -59,7 +59,7 @@ public:
 	 * AttackComponent->RequestAttack(PrimaryTap)에 위임한다.
 	 * 플레이어는 BT가 직접 호출하지 않으므로 OnEnded는 미사용.
 	 */
-	virtual void PerformAttack(FOnMontageEnded OnEnded) override;
+	virtual void PerformAttack(EBWAttackType AttackType, FOnMontageEnded OnEnded) override;
 
 protected:
 	virtual void BeginPlay() override;

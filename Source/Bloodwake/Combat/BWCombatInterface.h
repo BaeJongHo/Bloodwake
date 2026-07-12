@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "UObject/Interface.h"
 #include "Animation/AnimMontage.h"
+#include "Combat/BWAttackTypes.h"
 #include "BWCombatInterface.generated.h"
 
 /**
@@ -26,10 +27,11 @@ class BLOODWAKE_API IBWCombatInterface
 
 public:
 	/**
-	 * 공격을 1회 수행한다. 완료 콜백(OnEnded)을 받아 호출자(BT 등)가 종료를 동기화한다.
-	 * 구현체는 적합한 공격 몽타주를 재생하고, 종료 시 OnEnded를 호출(Montage_SetEndDelegate)해야 한다.
+	 * 지정한 공격 종류(AttackType)로 공격을 1회 수행한다. 완료 콜백(OnEnded)을 받아 호출자(BT 등)가 종료를 동기화한다.
+	 * 구현체는 AttackType에 해당하는 공격 몽타주를 재생하고, 종료 시 OnEnded를 호출(Montage_SetEndDelegate)해야 한다.
+	 * AttackType은 BT(UBWBTTask_PerformAttack)가 노드별로 지정한다(Light/Heavy/Special 등).
 	 * 스태미나 부족·몽타주 재생 실패 시에도 반드시 OnEnded를 즉시 호출해 BT Latent 교착을 방지한다.
 	 * OnEnded를 값으로 받는다 — Montage_SetEndDelegate가 비const 참조를 요구하므로.
 	 */
-	virtual void PerformAttack(FOnMontageEnded OnEnded) = 0;
+	virtual void PerformAttack(EBWAttackType AttackType, FOnMontageEnded OnEnded) = 0;
 };

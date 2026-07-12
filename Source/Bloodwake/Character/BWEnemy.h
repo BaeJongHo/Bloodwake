@@ -120,24 +120,34 @@ public:
 	/**
 	 * 머리 위 HP 바를 표시한다.
 	 * ABWEnemyAIController::UpdateTarget에서 플레이어를 감지하면 호출한다.
+	 * 보스(ABWEnemy_Boss)에서 2D 스크린 바로 재정의한다.
 	 */
-	void ShowHealthBar();
+	virtual void ShowHealthBar();
 
 	/**
 	 * 머리 위 HP 바를 숨긴다.
 	 * ABWEnemyAIController::UpdateTarget에서 감지 종료 시, 또는 사망 시 호출한다.
+	 * 보스(ABWEnemy_Boss)에서 2D 스크린 바로 재정의한다.
 	 */
-	void HideHealthBar();
+	virtual void HideHealthBar();
+
+	/**
+	 * 공격 커밋 직전 타깃 방향 즉시 스냅 회전 허용 여부.
+	 * 기본 true — 일반 적은 공격 직전 yaw를 즉시 정렬한다.
+	 * 보스(ABWEnemy_Boss)는 false 반환해 RotateToTarget 노티파이의 부드러운 회전과 충돌을 방지한다.
+	 * UBWBTTask_PerformAttack::ExecuteTask에서 스냅 회전 블록을 게이트한다.
+	 */
+	virtual bool ShouldFaceTargetBeforeAttack() const { return true; }
 
 	// ── IBWCombatInterface 구현 ─────────────────────────────────────────────
 
 	/**
-	 * 공격을 1회 수행한다. BT(UBWBTTask_PerformAttack)가 호출한다.
-	 * EnemyAttackDataTable에서 랜덤 Step을 선택해 몽타주를 재생하고,
-	 * 종료 시 OnEnded를 호출해 BT Latent를 완료시킨다.
+	 * 지정한 공격 종류(AttackType)로 공격을 1회 수행한다. BT(UBWBTTask_PerformAttack)가 호출한다.
+	 * 공격 DataTable(장착 무기의 AttackDataTable 우선, 없으면 EnemyAttackDataTable 폴백)에서
+	 * AttackType 행의 Step을 선택해 몽타주를 재생하고, 종료 시 OnEnded를 호출해 BT Latent를 완료시킨다.
 	 * 스태미나 부족·재생 실패 시에도 OnEnded를 즉시 호출(BT 교착 방지).
 	 */
-	virtual void PerformAttack(FOnMontageEnded OnEnded) override;
+	virtual void PerformAttack(EBWAttackType AttackType, FOnMontageEnded OnEnded) override;
 
 protected:
 	virtual void BeginPlay() override;
@@ -157,6 +167,15 @@ protected:
 	/** OnDeath 델리게이트 구독 콜백. UFUNCTION 필수(AddDynamic 요구). */
 	UFUNCTION()
 	void HandleDeath();
+
+	/**
+	 * 랙돌 전환 — 사망 처리 순서:
+	 * 1) bIsDead 가드, 2) StateComponent 초기화, 3) 몽타주 정지,
+	 * 4) CharacterMovement 비활성화, 5) 캡슐 콜리전 OFF,
+	 * 6) 메시 물리 ON, 7) CorpseLifeSpan 설정.
+	 * 보스(ABWEnemy_Boss)에서 무기 드롭·2D 바 정리 후 Super::EnableRagdoll() 호출.
+	 */
+	virtual void EnableRagdoll();
 
 	// ── 컴포넌트 ────────────────────────────────────────────────────────────
 
@@ -337,14 +356,6 @@ private:
 	 * HitVFX/HitSound가 설정되지 않으면 조용히 건너뛴다.
 	 */
 	void PlayHitEffects(const FVector& ImpactPoint);
-
-	/**
-	 * 랙돌 전환 — 사망 처리 순서:
-	 * 1) bIsDead 가드, 2) StateComponent 초기화, 3) 몽타주 정지,
-	 * 4) CharacterMovement 비활성화, 5) 캡슐 콜리전 OFF,
-	 * 6) 메시 물리 ON, 7) CorpseLifeSpan 설정.
-	 */
-	void EnableRagdoll();
 
 	/**
 	 * BeginPlay에서 DefaultWeaponClass를 스폰해 손 소켓에 즉시 부착한다.

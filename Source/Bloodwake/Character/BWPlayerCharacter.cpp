@@ -297,10 +297,11 @@ void ABWPlayerCharacter::SetBodyArmourHidden(EBWArmourType Type, bool bHideBodyP
 
 // ── IBWCombatInterface 구현 ───────────────────────────────────────────────────
 
-void ABWPlayerCharacter::PerformAttack(FOnMontageEnded OnEnded)
+void ABWPlayerCharacter::PerformAttack(EBWAttackType AttackType, FOnMontageEnded OnEnded)
 {
 	// 플레이어는 BT가 직접 호출하지 않는다 — 인터페이스 계약 충족용 얇은 구현.
-	// AttackComponent->RequestAttack(PrimaryTap)에 위임한다. OnEnded는 미사용.
+	// AttackComponent->RequestAttack(PrimaryTap)에 위임한다. AttackType/OnEnded는 미사용
+	// (플레이어 공격은 입력(EBWAttackInputKind) 주도이며, AI의 EBWAttackType 지정 대상이 아니다).
 	if (IsValid(AttackComponent))
 	{
 		AttackComponent->RequestAttack(EBWAttackInputKind::PrimaryTap);

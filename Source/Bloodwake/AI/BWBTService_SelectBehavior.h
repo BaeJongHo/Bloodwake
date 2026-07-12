@@ -8,6 +8,7 @@
 #include "BWBTService_SelectBehavior.generated.h"
 
 class UBlackboardComponent;
+class ABWEnemy;
 
 /**
  * 적 AI 행동 패턴을 매 주기 평가해 Blackboard Behavior 키를 갱신하는 BT Service.
@@ -16,6 +17,9 @@ class UBlackboardComponent;
  *
  * 배치: BT_Enemy 루트 Selector에 Service로 추가해 항상 평가되도록 한다.
  * 설정: BehaviorKey = Behavior, TargetKey = Target, AttackRangeDistance = 원하는 사거리.
+ *
+ * 보스 전용 결정 정책은 UBWBTService_SelectBehaviorBoss(파생 클래스)에서
+ * DecideBehavior를 override해 구현한다. 기존 잡몹 동작은 변경되지 않는다.
  *
  * 1단계: GAS 미적용, 싱글플레이 전용, Tick은 Service Interval로 대체(CLAUDE.md 4.1).
  */
@@ -34,38 +38,48 @@ protected:
 	 */
 	virtual void TickNode(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory, float DeltaSeconds) override;
 
-private:
 	/**
-	 * 타깃 유무·거리·순찰점을 평가해 EBWAIBehavior를 결정하고
-	 * SetBehaviorKey로 블랙보드에 기록한다.
+	 * 행동 결정 분기. 파생 클래스에서 override해 다른 결정 정책을 구현할 수 있다.
+	 * 기본 구현: 타깃 없으면 순찰점 유무로 Idle/Patrol, 있으면 거리로 Approach/MeleeAttack.
+	 * @param Enemy       제어 중인 ABWEnemy 참조.
+	 * @param TargetActor 블랙보드 Target 키에서 읽은 현재 감지 타깃. 없으면 nullptr.
 	 */
-	void UpdateBehavior(UBehaviorTreeComponent& OwnerComp);
+	virtual EBWAIBehavior DecideBehavior(ABWEnemy& Enemy, AActor* TargetActor) const;
+
+	/**
+	 * 매 주기 행동 평가 본체. TickNode에서 호출한다.
+	 * 기본 구현: 스턴/패링 → Stunned, 공격 중 → MeleeAttack 유지, 그 외 DecideBehavior 결과 반영.
+	 * 파생 클래스에서 override해 사용 가능한 Behavior 값 집합 자체를 바꿀 수 있다
+	 * (예: 보스는 자기 BT에 없는 Patrol/Stunned를 아예 쓰지 않도록 재구성).
+	 */
+	virtual void UpdateBehavior(UBehaviorTreeComponent& OwnerComp);
 
 	/**
 	 * 블랙보드 BehaviorKey에 지정된 EBWAIBehavior 값을 SetValueAsEnum으로 기록한다.
+	 * 파생 클래스의 UpdateBehavior override에서 재사용할 수 있도록 protected로 노출한다.
 	 */
 	void SetBehaviorKey(UBlackboardComponent* Comp, EBWAIBehavior Behavior);
 
-	// ── BT 노드 디테일 패널 설정값 ─────────────────────────────────────────────
+	// ── BT 노드 디테일 패널 설정값 (protected: 파생 서비스에서 접근 가능) ──────────────
 
 	/**
 	 * 이 거리(cm) 이내면 MeleeAttack, 밖이면 Approach로 분기한다.
 	 * BT 에디터 노드 디테일 패널에서 인스턴스별로 튜닝한다.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "AI|Behavior", meta = (ClampMin = "0.0", AllowPrivateAccess = "true"))
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "AI|Behavior", meta = (ClampMin = "0.0"))
 	float AttackRangeDistance = 200.f;
 
 	/**
 	 * 쓸 Enum 키 선택자. BT 에디터에서 BB_Enemy의 Behavior 키를 지정한다.
 	 * 생성자에서 EBWAIBehavior 타입 필터를 등록해 Enum 키만 표시한다.
 	 */
-	UPROPERTY(EditAnywhere, Category = "Blackboard", meta = (AllowPrivateAccess = "true"))
+	UPROPERTY(EditAnywhere, Category = "Blackboard")
 	FBlackboardKeySelector BehaviorKey;
 
 	/**
 	 * 타깃 감지 여부를 읽을 Object 키 선택자. BB_Enemy의 Target 키를 지정한다.
 	 * 생성자에서 AActor 타입 필터를 등록한다.
 	 */
-	UPROPERTY(EditAnywhere, Category = "Blackboard", meta = (AllowPrivateAccess = "true"))
+	UPROPERTY(EditAnywhere, Category = "Blackboard")
 	FBlackboardKeySelector TargetKey;
 };
