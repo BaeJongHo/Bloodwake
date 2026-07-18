@@ -36,8 +36,22 @@ public:
 protected:
 	/**
 	 * 보스 전용 행동 평가 override. 부모의 결정 로직을 대체하며,
-	 * 보스 BT가 가진 Idle/Approach/MeleeAttack 값만 블랙보드에 기록한다.
+	 * 보스 BT가 가진 Idle/Approach/MeleeAttack/Strafe 값만 블랙보드에 기록한다.
 	 * (부모의 DecideBehavior는 호출하지 않는다 — Patrol/Stunned 유입 원천 차단.)
+	 *
+	 * 결정 순서:
+	 *   1. 패링/스턴 → Idle
+	 *   2. 공격 모션 재생 중 → MeleeAttack 유지 (모션 캔슬 방지)
+	 *   3. 타깃 없음 → Idle
+	 *   4. 스태미나 부족 → Strafe (공격 홀드 분기 뒤 — 자기 공격이 스태미나 임계로 캔슬되는 것 방지)
+	 *   5. 거리 기준 → MeleeAttack / Approach
 	 */
 	virtual void UpdateBehavior(UBehaviorTreeComponent& OwnerComp) override;
+
+	/**
+	 * 이 값 미만이면 공격을 중단하고 Strafe(간보기)로 전환한다. 절대값(스태미나 포인트) 기준.
+	 * BT 노드 디테일 패널에서 튜닝한다. UBWAttributeComponent::IsStaminaAboveThreshold 재사용.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "AI|Behavior", meta = (ClampMin = "0.0"))
+	float StrafeStaminaThreshold = 30.f;
 };

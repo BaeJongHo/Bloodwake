@@ -6,6 +6,7 @@
 #include "BehaviorTree/BehaviorTreeComponent.h"
 #include "BehaviorTree/BlackboardComponent.h"
 #include "Character/BWEnemy.h"
+#include "Combat/BWAttributeComponent.h"
 
 UBWBTService_SelectBehaviorBoss::UBWBTService_SelectBehaviorBoss()
 {
@@ -62,6 +63,16 @@ void UBWBTService_SelectBehaviorBoss::UpdateBehavior(UBehaviorTreeComponent& Own
 	if (TargetActor == nullptr)
 	{
 		SetBehaviorKey(BB, EBWAIBehavior::Idle);
+		return;
+	}
+
+	// ── [신규] 스태미나 부족 → Strafe (간보기) ───────────────────────────────────
+	// IsAttacking() 분기(2번) 뒤에 위치해야 한다.
+	// 공격 시작 시 스태미나를 소비하므로, 판정이 앞서면 자기 공격 모션을 자기가 캔슬하는 문제가 발생한다.
+	const UBWAttributeComponent* Attr = Enemy->GetAttributeComponent();
+	if (IsValid(Attr) && !Attr->IsStaminaAboveThreshold(StrafeStaminaThreshold))
+	{
+		SetBehaviorKey(BB, EBWAIBehavior::Strafe);
 		return;
 	}
 

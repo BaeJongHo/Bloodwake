@@ -47,6 +47,14 @@ public:
 	const TArray<TObjectPtr<ATargetPoint>>& GetPatrolPoints() const { return PatrolPoints; }
 
 	/**
+	 * AttributeComponent 접근자.
+	 * BT Service 등 외부에서 FindComponentByClass 없이 스태미나/체력에 접근하기 위해 제공한다.
+	 * ABWPlayerCharacter::GetAttributeComponent()와 동일 시그니처로 대칭 제공.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Attributes")
+	UBWAttributeComponent* GetAttributeComponent() const { return AttributeComponent; }
+
+	/**
 	 * 플레이어 패링 성공 시 호출된다. 이 적을 Parried 상태로 전환하고 패링 당함 리액션 몽타주를 재생한다.
 	 * 재생 시간 동안 이동이 차단되며, 타이머로 상태를 복구한다.
 	 * bIsDead면 즉시 return.

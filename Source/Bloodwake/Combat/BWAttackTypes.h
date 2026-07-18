@@ -10,7 +10,10 @@
 /**
  * 공격 종류 열거형.
  * DataTable RowName 키와 1:1 대응한다 (GetRowNameForAttackType 참조).
- * Light/Heavy는 콤보형(다단계), Running/Special은 단발형(Steps 1개).
+ * Light/Heavy는 콤보형(다단계), Running/Special/Air는 단발형(Steps 1개).
+ *
+ * 주의: 새 값은 반드시 열거자 끝에 추가한다. 중간에 삽입하면 uint8 직렬화 값이 밀려
+ * 기존 DataTable/BT 에셋이 엉뚱한 공격을 가리킨다.
  */
 UENUM(BlueprintType)
 enum class EBWAttackType : uint8
@@ -19,6 +22,8 @@ enum class EBWAttackType : uint8
 	Running UMETA(DisplayName = "Running"),
 	Special UMETA(DisplayName = "Special"),
 	Heavy   UMETA(DisplayName = "Heavy"),
+	/** 공중 공격(보스 스페셜). 몽타주 체공 구간에 BW Flying NotifyState를 배치해 중력을 무시한다. */
+	Air     UMETA(DisplayName = "Air"),
 };
 
 /**
@@ -34,6 +39,7 @@ inline FName GetAttackRowName(EBWAttackType Type)
 	case EBWAttackType::Running: return FName(TEXT("Running"));
 	case EBWAttackType::Special: return FName(TEXT("Special"));
 	case EBWAttackType::Heavy:   return FName(TEXT("Heavy"));
+	case EBWAttackType::Air:     return FName(TEXT("Air"));
 	default:                     return NAME_None;
 	}
 }

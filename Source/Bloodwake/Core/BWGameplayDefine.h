@@ -54,4 +54,10 @@ namespace BWGameplayTags
 
 	/** 포션 마시기(DrinkingPotion) 상태 태그. 포션 마시기 몽타주 진행 중 — 공격/방어/점프/구르기/패링 금지. 문자열: "Character.State.DrinkingPotion" */
 	BLOODWAKE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Character_State_DrinkingPotion);
+
+	/** 넉다운 피격(KnockdownHit) 상태 태그. 쓰러짐 몽타주 진행 중, 모든 입력 차단. 문자열: "Character.State.KnockdownHit" */
+	BLOODWAKE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Character_State_KnockdownHit);
+
+	/** 공중 공격(Air) 상태 태그. 보스 체공 공격 구간 중 — MovementMode=Flying 유지. 문자열: "Character.Attack.Air" */
+	BLOODWAKE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Character_Attack_Air);
 }

@@ -166,6 +166,32 @@ public:
 	void EndParry();
 
 	/**
+	 * 넉다운(쓰러짐) 상태인지 반환한다. Character.State.KnockdownHit 태그 보유 여부로 판단한다.
+	 * 이 상태에서는 모든 입력이 차단되며, 넉다운 몽타주가 종료되면 EndKnockdown이 해제한다.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Combat|Knockdown")
+	bool IsKnockedDown() const;
+
+	/**
+	 * 쓰러짐 구간을 끝내고 기상(GetUpMontage) 구간으로 전환한다.
+	 * 이 시점에는 아직 KnockdownHit 태그와 입력 잠금이 유지된다 — 해제는 EndGetUp이 담당한다.
+	 * 넉다운 몽타주에 배치한 AnimNotify가 호출하거나, 몽타주 종료 안전망
+	 * (OnKnockdownMontageEnded)이 자동으로 호출한다.
+	 * 기상 몽타주가 없거나 재생에 실패하면 즉시 EndGetUp()으로 넘어간다(입력 먹통 방지).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Combat|Knockdown")
+	void EndKnockdown();
+
+	/**
+	 * 기상 완료 — 넉다운 사이클의 최종 해제 지점. KnockdownHit 태그 해제 + 입력 복원.
+	 * 기상 몽타주에 배치한 AnimNotify가 원하는 회복 프레임에서 호출하거나,
+	 * 몽타주 종료 안전망(OnGetUpMontageEnded)이 자동으로 호출한다(EndParry와 동일 패턴).
+	 * IsKnockedDown() 가드로 중복 복원을 차단해 입력 잠금/복원 1쌍을 보장한다.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Combat|Knockdown")
+	void EndGetUp();
+
+	/**
 	 * 사망 상태인지 반환한다. AI(BWEnemyAIController) 등 외부에서 죽은 플레이어를
 	 * 추격/공격 대상에서 제외하는 판정에 사용한다. BP에서도 조회 가능.
 	 */
@@ -581,6 +607,24 @@ protected:
 
 	// ── BP 설정용 — 4방향 히트 리액션 몽타주 (Enemy 패턴 이식) ────
 
+	/**
+	 * 넉다운(쓰러짐→기상) 몽타주. UBWDamageType_Knockdown 피격 시 일반 히트 리액션 대신 재생한다.
+	 * null이면 일반 4방향 히트 리액션으로 폴백한다.
+	 * BP 자식(BP_PlayerCharacter)에서 AM_ 넉다운 몽타주를 지정한다.
+	 * GC 추적: UAnimMontage는 UObject 파생이므로 TObjectPtr + UPROPERTY 필수(CLAUDE.md 3.3).
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Player|HitReaction")
+	TObjectPtr<UAnimMontage> KnockdownMontage;
+
+	/**
+	 * 기상(일어나기) 몽타주. 넉다운 몽타주가 끝나면(EndKnockdown) 이어서 재생한다.
+	 * 이 몽타주가 끝나는 시점(EndGetUp)에 KnockdownHit 태그가 해제되고 입력이 복원된다.
+	 * null이면 기상 연출 없이 즉시 EndGetUp으로 넘어가 입력을 돌려준다(입력 먹통 방지).
+	 * BP 자식(BP_PlayerCharacter)에서 AM_ 기상 몽타주를 지정한다.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Player|HitReaction")
+	TObjectPtr<UAnimMontage> GetUpMontage;
+
 	/** 정면 피격 히트 리액션 몽타주. BP 자식에서 AM_ 에셋 지정. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Player|HitReaction")
 	TObjectPtr<UAnimMontage> HitReactFrontMontage;
@@ -710,12 +754,44 @@ private:
 	void OnBlockingHitMontageEnded(UAnimMontage* Montage, bool bInterrupted);
 
 	/**
-	 * 블로킹 히트 경직 동안 모든 플레이어 입력을 잠그거나(true) 복원한다(false).
-	 * 핸들러 누락을 피하기 위해 사망 입력 차단(EnableDeathState)과 동일하게
+	 * 플레이어 입력을 잠그거나(true) 복원한다(false).
 	 * PlayerController 단위(SetIgnoreMoveInput/SetIgnoreLookInput + DisableInput)로 처리한다.
-	 * 잠금/복원은 정확히 1쌍으로만 호출된다(EndBlockingHit의 IsBlockingHit 가드가 중복 복원을 차단).
+	 * 이전 이름 SetBlockingHitInputLocked에서 일반화 — 블로킹 히트/넉다운 양쪽 경로가 공유한다.
+	 * 잠금/복원은 각 경로의 진입 가드(IsBlockingHit/IsKnockedDown)가 정확히 1쌍을 보장한다.
 	 */
-	void SetBlockingHitInputLocked(bool bLocked);
+	void SetInputLocked(bool bLocked);
+
+	/**
+	 * 넉다운 리액션을 시작한다. KnockdownHit 태그 부착 + 입력 잠금 + KnockdownMontage 재생.
+	 * 재진입 가드(IsKnockedDown)로 Montage_SetEndDelegate 교체에 의한 콜백 유실을 방지한다.
+	 * Montage_Play 반환 <= 0이면 즉시 EndKnockdown()을 호출해 입력 먹통을 방지한다.
+	 * TakeDamage의 일반 피격 경로에서 bIsKnockdownDamage && KnockdownMontage 조건 충족 시 호출한다.
+	 */
+	void PlayKnockdownReaction();
+
+	/**
+	 * KnockdownMontage의 블렌드 아웃 시작 콜백(Montage_SetBlendingOutDelegate)이자
+	 * 종료 콜백(Montage_SetEndDelegate 안전망) — 두 델리게이트에 함께 바인딩한다.
+	 * 블렌드 아웃 시작 시점에 EndKnockdown()으로 기상 몽타주를 이어 재생해야
+	 * 넉다운 → 아이들 → 기상으로 끊기지 않고 한 동작으로 연결된다.
+	 * 중단(bInterrupted=true)이면 기상을 덧씌우지 않고 EndGetUp()으로 상태만 해제한다.
+	 * bIsGettingUp 가드가 중복 호출(BlendingOut → End 연속 발화, AnimNotify 선행 호출)을 차단한다.
+	 */
+	void OnKnockdownMontageEnded(UAnimMontage* Montage, bool bInterrupted);
+
+	/**
+	 * GetUpMontage 종료 콜백(Montage_SetEndDelegate 안전망).
+	 * 정상 종료든 중단이든 EndGetUp()을 호출해 입력이 영구히 잠기지 않도록 보장한다.
+	 * AnimNotify가 먼저 EndGetUp을 호출했다면 IsKnockedDown 가드가 중복 복원을 차단한다.
+	 */
+	void OnGetUpMontageEnded(UAnimMontage* Montage, bool bInterrupted);
+
+	/**
+	 * 기상 몽타주 재생 중인지 나타내는 플래그. EndKnockdown의 재진입 가드로 사용한다.
+	 * 기상 구간에도 KnockdownHit 태그가 유지되므로 IsKnockedDown()만으로는 중복 진입을 막을 수 없다
+	 * (재진입 시 Montage_SetEndDelegate가 교체되어 종료 콜백이 유실 → 입력 영구 잠김).
+	 */
+	bool bIsGettingUp = false;
 
 	/**
 	 * 블로킹(가드) 상태를 취소한다. Blocking 태그를 해제하고 이동 속도를 복원한다.

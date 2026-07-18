@@ -396,6 +396,11 @@ FGameplayTag UBWAttackComponent::GetTagForAttackType(EBWAttackType Type) const
 	case EBWAttackType::Running: return BWGameplayTags::Character_Attack_Running.GetTag();
 	case EBWAttackType::Special: return BWGameplayTags::Character_Attack_Special.GetTag();
 	case EBWAttackType::Heavy:   return BWGameplayTags::Character_Attack_Heavy.GetTag();
+	// 주의: Character_Attack_Air는 UBWAnimNotifyState_BWFlying이 체공 구간에서도 부착/해제한다.
+	// StateComponent의 태그는 참조 카운트가 없으므로, 플레이어 공중 공격을 추가할 경우
+	// 한 몽타주에서 두 주체가 같은 태그를 다루지 않도록 소유권을 한쪽으로 정리해야 한다
+	// (현재 Air는 AI 전용이라 이 경로로 들어오지 않는다).
+	case EBWAttackType::Air:     return BWGameplayTags::Character_Attack_Air.GetTag();
 	default:
 		UE_LOG(LogTemp, Warning, TEXT("[BWAttackComponent] GetTagForAttackType: 알 수 없는 공격 타입입니다."));
 		return FGameplayTag::EmptyTag;
@@ -410,6 +415,7 @@ FName UBWAttackComponent::GetRowNameForAttackType(EBWAttackType Type) const
 	case EBWAttackType::Running: return FName(TEXT("Running"));
 	case EBWAttackType::Special: return FName(TEXT("Special"));
 	case EBWAttackType::Heavy:   return FName(TEXT("Heavy"));
+	case EBWAttackType::Air:     return FName(TEXT("Air"));
 	default:
 		UE_LOG(LogTemp, Warning, TEXT("[BWAttackComponent] GetRowNameForAttackType: 알 수 없는 공격 타입입니다."));
 		return NAME_None;

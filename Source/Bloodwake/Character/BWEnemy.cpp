@@ -155,21 +155,26 @@ void ABWEnemy::PerformAttack(EBWAttackType AttackType, FOnMontageEnded OnEnded)
 		return;
 	}
 
-	// 3) 공격 DataTable 결정 — 장착 무기(ABWWeapon)의 AttackDataTable을 우선 사용하고,
-	//    무기가 없거나 테이블 미지정이면 EnemyAttackDataTable로 폴백한다.
+	// 3) 공격 DataTable 결정 — EnemyAttackDataTable을 우선 사용하고,
+	//    장착 무기(ABWWeapon)의 AttackDataTable 로 폴백한다.
 	//    → 무기의 CombatType(TwoHanded 등)에 맞는 몽타주 세트가 자동으로 선택된다(무기 주도).
 	UDataTable* AttackTable = nullptr;
-	if (IsValid(CombatComponent))
-	{
-		if (const ABWWeapon* EquippedWeapon = Cast<ABWWeapon>(CombatComponent->GetEquippedWeapon()))
-		{
-			AttackTable = EquippedWeapon->GetAttackDataTable();
-		}
-	}
-	if (!AttackTable)
+	if (EnemyAttackDataTable)
 	{
 		AttackTable = EnemyAttackDataTable;
 	}
+
+	if (!AttackTable)
+	{
+		if (IsValid(CombatComponent))
+		{
+			if (const ABWWeapon* EquippedWeapon = Cast<ABWWeapon>(CombatComponent->GetEquippedWeapon()))
+			{
+				AttackTable = EquippedWeapon->GetAttackDataTable();
+			}
+		}
+	}
+
 	if (!AttackTable)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("[BWEnemy] PerformAttack: 사용할 공격 DataTable이 없습니다(무기·EnemyAttackDataTable 모두 미설정). (%s)"), *GetName());

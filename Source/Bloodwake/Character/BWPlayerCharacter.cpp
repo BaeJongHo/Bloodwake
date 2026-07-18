@@ -23,6 +23,7 @@
 #include "Combat/BWAttackTypes.h"
 #include "Character/BWStateComponent.h"
 #include "Core/BWGameplayDefine.h"
+#include "Combat/BWDamageTypes.h"
 #include "Equipment/BWPickUpItem.h"
 #include "Equipment/BWEquipItem.h"
 #include "Equipment/BWArmour.h"
@@ -322,6 +323,12 @@ float ABWPlayerCharacter::TakeDamage(float DamageAmount, const FDamageEvent& Dam
 	// 엔진 표준 처리를 통해 실제 데미지 수치를 획득한다.
 	const float ActualDamage = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
 
+	// 넉다운 데미지 타입 판정 — 일반 피격 경로에서 리액션 분기에 사용한다.
+	// UBWDamageType_Knockdown 서브클래스이면 넉다운 몽타주를 재생하고 입력을 차단한다.
+	const bool bIsKnockdownDamage =
+		DamageEvent.DamageTypeClass &&
+		DamageEvent.DamageTypeClass->IsChildOf(UBWDamageType_Knockdown::StaticClass());
+
 	// FPointDamageEvent에서 ImpactPoint 추출 (VFX/사운드 스폰 위치).
 	// 방향 판정은 무기 스윙 벡터(ShotDirection)가 아니라 공격자 실제 위치를 쓰므로 ShotDirection은 사용하지 않는다.
 	FVector ImpactPoint = GetActorLocation();
@@ -408,9 +415,19 @@ float ABWPlayerCharacter::TakeDamage(float DamageAmount, const FDamageEvent& Dam
 		InterruptWhileDrinkingPotion();
 	}
 
-	// 피격 이펙트·리액션 재생 (사망은 OnDeath 델리게이트가 별도 트리거)
+	// 피격 이펙트 재생 (사망은 OnDeath 델리게이트가 별도 트리거)
 	PlayHitEffects(ImpactPoint);
-	PlayHitReaction(Attacker);
+
+	// 넉다운 vs 일반 히트 리액션 분기.
+	// 넉다운 몽타주가 설정된 경우에만 넉다운 경로로 진입한다(null이면 일반 히트 리액션으로 폴백).
+	if (bIsKnockdownDamage && KnockdownMontage)
+	{
+		PlayKnockdownReaction();
+	}
+	else
+	{
+		PlayHitReaction(Attacker);
+	}
 
 	return ActualDamage;
 }
@@ -492,10 +509,10 @@ void ABWPlayerCharacter::EnableDeathState()
 
 void ABWPlayerCharacter::Move(const FInputActionValue& Value)
 {
-	// 구르기, 공격, 피격, 사망, 패링 중에는 이동 입력을 무시한다.
+	// 구르기, 공격, 피격, 사망, 패링, 넉다운 중에는 이동 입력을 무시한다.
 	// 패링은 윈도우 태그(IsParrying)가 아니라 몽타주 전체를 덮는 bIsPerformingParry로 막는다
 	// (윈도우 전/후 회복 구간에서도 이동이 풀리지 않도록). 해제는 ParryEnd 노티파이(EndParry)/몽타주 종료.
-	if (IsRolling() || IsAttacking() || IsHit() || bIsDead || bIsPerformingParry)
+	if (IsRolling() || IsAttacking() || IsHit() || bIsDead || bIsPerformingParry || IsKnockedDown())
 	{
 		return;
 	}
@@ -533,8 +550,8 @@ void ABWPlayerCharacter::Look(const FInputActionValue& Value)
 
 void ABWPlayerCharacter::StartJump()
 {
-	// 구르기, 공격, 피격, 사망, 블로킹, 포션 마시기 중에는 점프를 차단한다.
-	if (IsRolling() || IsAttacking() || IsHit() || bIsDead || IsBlocking() || IsDrinkingPotion())
+	// 구르기, 공격, 피격, 사망, 블로킹, 포션 마시기, 넉다운 중에는 점프를 차단한다.
+	if (IsRolling() || IsAttacking() || IsHit() || bIsDead || IsBlocking() || IsDrinkingPotion() || IsKnockedDown())
 	{
 		return;
 	}
@@ -556,8 +573,8 @@ bool ABWPlayerCharacter::IsHit() const
 
 bool ABWPlayerCharacter::CanBlock() const
 {
-	// 사망·질주·공격·피격·구르기·포션 마시기 중이거나 방패가 손에 없으면 가드 불가.
-	if (bIsDead || bIsSprinting || IsAttacking() || IsHit() || IsRolling() || IsDrinkingPotion())
+	// 사망·질주·공격·피격·구르기·포션 마시기·넉다운 중이거나 방패가 손에 없으면 가드 불가.
+	if (bIsDead || bIsSprinting || IsAttacking() || IsHit() || IsRolling() || IsDrinkingPotion() || IsKnockedDown())
 	{
 		return false;
 	}
@@ -633,6 +650,12 @@ void ABWPlayerCharacter::CancelBlocking()
 
 void ABWPlayerCharacter::StartSprint(const FInputActionValue& Value)
 {
+	// 넉다운 중에는 질주 불가 (SetInputLocked 카운터 불일치로 Enhanced Input이 재개되더라도 차단)
+	if (IsKnockedDown())
+	{
+		return;
+	}
+
 	// 블로킹 중에는 질주 불가
 	if (IsBlocking())
 	{
@@ -758,8 +781,9 @@ void ABWPlayerCharacter::HandleStaminaDepleted()
 
 void ABWPlayerCharacter::HandleStaminaChanged(float NewValue, float MaxValue)
 {
-	// 버튼이 눌린 상태이고, 현재 질주 중이 아니며, 스태미나가 임계치 이상이면 자동 재개
-	if (bSprintInputHeld && !bIsSprinting && IsValid(AttributeComponent))
+	// 버튼이 눌린 상태이고, 현재 질주 중이 아니며, 넉다운 중이 아니고, 스태미나가 임계치 이상이면 자동 재개
+	// (!IsKnockedDown(): 키 입력 없이 타이머로 발동하므로 키 입력 경로와 무관하게 차단 필요)
+	if (bSprintInputHeld && !bIsSprinting && !IsKnockedDown() && IsValid(AttributeComponent))
 	{
 		if (AttributeComponent->IsStaminaAboveThreshold(SprintResumeThreshold))
 		{
@@ -775,8 +799,8 @@ void ABWPlayerCharacter::Roll(const FInputActionValue& Value)
 		return;
 	}
 
-	// 피격, 사망, 이미 구르는 중, 공격 중, 포션 마시기 중에는 중복 입력 무시.
-	if (IsHit() || bIsDead || IsRolling() || IsAttacking() || IsDrinkingPotion())
+	// 피격, 사망, 이미 구르는 중, 공격 중, 포션 마시기 중, 넉다운 중에는 중복 입력 무시.
+	if (IsHit() || bIsDead || IsRolling() || IsAttacking() || IsDrinkingPotion() || IsKnockedDown())
 	{
 		return;
 	}
@@ -903,6 +927,12 @@ bool ABWPlayerCharacter::IsLockedOn() const
 
 void ABWPlayerCharacter::OnLockOn(const FInputActionValue& /*Value*/)
 {
+	// 넉다운 중 락온 토글 차단
+	if (IsKnockedDown())
+	{
+		return;
+	}
+
 	if (!IsValid(TargetingComponent))
 	{
 		return;
@@ -913,6 +943,12 @@ void ABWPlayerCharacter::OnLockOn(const FInputActionValue& /*Value*/)
 
 void ABWPlayerCharacter::OnSwitchTarget(const FInputActionValue& Value)
 {
+	// 넉다운 중 타깃 전환 차단
+	if (IsKnockedDown())
+	{
+		return;
+	}
+
 	if (!IsValid(TargetingComponent))
 	{
 		return;
@@ -940,6 +976,12 @@ bool ABWPlayerCharacter::CanSprint() const
 
 void ABWPlayerCharacter::Interact(const FInputActionValue& /*Value*/)
 {
+	// 넉다운 중 상호작용 차단
+	if (IsKnockedDown())
+	{
+		return;
+	}
+
 	if (!IsValid(CombatComponent))
 	{
 		return;
@@ -1008,6 +1050,12 @@ void ABWPlayerCharacter::Interact(const FInputActionValue& /*Value*/)
 
 void ABWPlayerCharacter::ToggleWeapon(const FInputActionValue& /*Value*/)
 {
+	// 넉다운 중 무기 토글 차단
+	if (IsKnockedDown())
+	{
+		return;
+	}
+
 	if (!IsValid(CombatComponent))
 	{
 		return;
@@ -1018,6 +1066,12 @@ void ABWPlayerCharacter::ToggleWeapon(const FInputActionValue& /*Value*/)
 
 void ABWPlayerCharacter::ToggleShield(const FInputActionValue& /*Value*/)
 {
+	// 넉다운 중 방패 토글 차단
+	if (IsKnockedDown())
+	{
+		return;
+	}
+
 	if (!IsValid(CombatComponent))
 	{
 		return;
@@ -1040,8 +1094,8 @@ bool ABWPlayerCharacter::IsAttacking() const
 
 void ABWPlayerCharacter::OnAttackStarted(const FInputActionValue& /*Value*/)
 {
-	// 피격, 사망, 블로킹, 패링(몽타주 전체 구간), 포션 마시기 중에는 공격 입력 차단
-	if (IsHit() || bIsDead || IsBlocking() || bIsPerformingParry || IsDrinkingPotion())
+	// 피격, 사망, 블로킹, 패링(몽타주 전체 구간), 포션 마시기, 넉다운 중에는 공격 입력 차단
+	if (IsHit() || bIsDead || IsBlocking() || bIsPerformingParry || IsDrinkingPotion() || IsKnockedDown())
 	{
 		return;
 	}
@@ -1056,8 +1110,8 @@ void ABWPlayerCharacter::OnAttackStarted(const FInputActionValue& /*Value*/)
 
 void ABWPlayerCharacter::OnAttackHold(const FInputActionValue& /*Value*/)
 {
-	// 피격, 사망, 블로킹, 패링(몽타주 전체 구간), 포션 마시기 중에는 공격 입력 차단
-	if (IsHit() || bIsDead || IsBlocking() || bIsPerformingParry || IsDrinkingPotion())
+	// 피격, 사망, 블로킹, 패링(몽타주 전체 구간), 포션 마시기, 넉다운 중에는 공격 입력 차단
+	if (IsHit() || bIsDead || IsBlocking() || bIsPerformingParry || IsDrinkingPotion() || IsKnockedDown())
 	{
 		return;
 	}
@@ -1072,8 +1126,8 @@ void ABWPlayerCharacter::OnAttackHold(const FInputActionValue& /*Value*/)
 
 void ABWPlayerCharacter::OnHeavyAttack(const FInputActionValue& /*Value*/)
 {
-	// 피격, 사망, 블로킹, 패링(몽타주 전체 구간), 포션 마시기 중에는 공격 입력 차단
-	if (IsHit() || bIsDead || IsBlocking() || bIsPerformingParry || IsDrinkingPotion())
+	// 피격, 사망, 블로킹, 패링(몽타주 전체 구간), 포션 마시기, 넉다운 중에는 공격 입력 차단
+	if (IsHit() || bIsDead || IsBlocking() || bIsPerformingParry || IsDrinkingPotion() || IsKnockedDown())
 	{
 		return;
 	}
@@ -1168,7 +1222,7 @@ void ABWPlayerCharacter::PlayBlockingHitReaction(const FVector& ImpactPoint)
 			AnimInstance->Montage_SetEndDelegate(EndDelegate, BlockHitMontage);
 
 			// 가드 피격 경직 동안 모든 입력을 잠근다. 회복은 몽타주의 BlockingHitEnd 노티파이(또는 종료 안전망)가 푼다.
-			SetBlockingHitInputLocked(true);
+			SetInputLocked(true);
 		}
 		// 재생 실패 시: 태그를 부착하지 않았으므로 별도 해제 불필요.
 	}
@@ -1207,11 +1261,11 @@ void ABWPlayerCharacter::EndBlockingHit()
 	// 사망 중이라면 사망 처리(EnableDeathState)가 잠근 입력을 유지해야 하므로 복원하지 않는다.
 	if (!bIsDead)
 	{
-		SetBlockingHitInputLocked(false);
+		SetInputLocked(false);
 	}
 }
 
-void ABWPlayerCharacter::SetBlockingHitInputLocked(bool bLocked)
+void ABWPlayerCharacter::SetInputLocked(bool bLocked)
 {
 	APlayerController* PC = Cast<APlayerController>(GetController());
 	if (!PC)
@@ -1439,8 +1493,8 @@ bool ABWPlayerCharacter::CanParry() const
 		return false;
 	}
 
-	// 공격, 구르기, 피격, 블로킹, 블로킹 히트, 이미 패링 중, 포션 마시기 중 상태 차단
-	if (IsAttacking() || IsRolling() || IsHit() || IsBlocking() || IsBlockingHit() || IsParrying() || IsDrinkingPotion())
+	// 공격, 구르기, 피격, 블로킹, 블로킹 히트, 이미 패링 중, 포션 마시기, 넉다운 중 상태 차단
+	if (IsAttacking() || IsRolling() || IsHit() || IsBlocking() || IsBlockingHit() || IsParrying() || IsDrinkingPotion() || IsKnockedDown())
 	{
 		return false;
 	}
@@ -1593,8 +1647,8 @@ bool ABWPlayerCharacter::IsDrinkingPotion() const
 
 void ABWPlayerCharacter::OnDrinkPotion(const FInputActionValue& /*Value*/)
 {
-	// 상태 게이트: 사망·피격·공격·구르기·블로킹·블로킹 히트·패링·이미 포션 마시기 중이면 차단.
-	if (bIsDead || IsHit() || IsAttacking() || IsRolling() || IsBlocking() || IsBlockingHit() || IsParrying() || bIsPerformingParry || IsDrinkingPotion())
+	// 상태 게이트: 사망·피격·공격·구르기·블로킹·블로킹 히트·패링·이미 포션 마시기·넉다운 중이면 차단.
+	if (bIsDead || IsHit() || IsAttacking() || IsRolling() || IsBlocking() || IsBlockingHit() || IsParrying() || bIsPerformingParry || IsDrinkingPotion() || IsKnockedDown())
 	{
 		return;
 	}
@@ -1684,4 +1738,180 @@ void ABWPlayerCharacter::OnDrinkMontageEnded(UAnimMontage* /*Montage*/, bool /*b
 	{
 		PotionInventoryComponent->DespawnPotion();
 	}
+}
+
+// ── 넉다운(Knockdown) 구현 ────────────────────────────────────────────────────
+
+bool ABWPlayerCharacter::IsKnockedDown() const
+{
+	return IsValid(StateComponent)
+		&& StateComponent->HasStateTag(BWGameplayTags::Character_State_KnockdownHit.GetTag());
+}
+
+void ABWPlayerCharacter::PlayKnockdownReaction()
+{
+	// 1. 사망 가드 — 사망 처리 중에는 넉다운 리액션을 시작하지 않는다.
+	if (bIsDead)
+	{
+		return;
+	}
+
+	// 2. 재진입 가드 — 이미 넉다운 중이면 즉시 return.
+	// Montage_SetEndDelegate가 교체되면 이전 종료 콜백이 유실되고 입력 잠금이 영구화되므로 반드시 차단한다
+	// (PlayBlockingHitReaction의 bBlockingHitInProgress 가드와 동일 이유, BWPlayerCharacter.cpp:371-375).
+	if (IsKnockedDown())
+	{
+		return;
+	}
+
+	// 3. AnimInstance 확보 실패 시 return
+	UAnimInstance* AnimInstance = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr;
+	if (!AnimInstance)
+	{
+		return;
+	}
+
+	// 4. 가드 강제 해제 — 넉다운은 블로킹 상태를 해제한다.
+	CancelBlocking();
+
+	// 4-b. 기상 플래그 초기화 — 이전 사이클이 사망 등으로 중단돼 플래그가 남아 있을 수 있다.
+	bIsGettingUp = false;
+
+	// 5. 넉다운 상태 태그 부착
+	if (IsValid(StateComponent))
+	{
+		StateComponent->AddStateTag(BWGameplayTags::Character_State_KnockdownHit.GetTag());
+	}
+
+	// 6. 입력 잠금 (PlayerController 단위 — EnableDeathState와 동일 방식)
+	SetInputLocked(true);
+
+	// 7. 넉다운 몽타주 재생 및 기상 전환 델리게이트 바인딩
+	const float Length = AnimInstance->Montage_Play(KnockdownMontage);
+	if (Length > 0.f)
+	{
+		// BlendingOut 델리게이트(블렌드 아웃 "시작" 시점)로 기상 몽타주를 잇는다.
+		// End 델리게이트는 블렌드 아웃이 끝난 뒤에야 발화하므로, 그때 기상을 시작하면
+		// 그 사이 캐릭터가 아이들(선 자세)로 섞였다가 다시 눕는 것처럼 보인다.
+		// 여기서 넘기면 넉다운 블렌드 아웃과 기상 블렌드 인이 교차되어 한 동작으로 이어진다.
+		FOnMontageBlendingOutStarted BlendOutDelegate;
+		BlendOutDelegate.BindUObject(this, &ABWPlayerCharacter::OnKnockdownMontageEnded);
+		AnimInstance->Montage_SetBlendingOutDelegate(BlendOutDelegate, KnockdownMontage);
+
+		// End 델리게이트는 안전망으로 남긴다(BlendingOut이 유실되는 경로 대비).
+		// 정상 흐름에서는 bIsGettingUp 가드에 걸려 무동작한다.
+		FOnMontageEnded EndDelegate;
+		EndDelegate.BindUObject(this, &ABWPlayerCharacter::OnKnockdownMontageEnded);
+		AnimInstance->Montage_SetEndDelegate(EndDelegate, KnockdownMontage);
+	}
+	else
+	{
+		// 몽타주 재생 실패 — 입력 먹통 방지를 위해 즉시 상태 복원.
+		// PlayHitReaction의 실패 처리(BWPlayerCharacter.cpp:1368-1375)와 동일 정책.
+		EndKnockdown();
+	}
+}
+
+void ABWPlayerCharacter::EndKnockdown()
+{
+	// 1. 넉다운 중이 아니면 무동작.
+	if (!IsKnockedDown())
+	{
+		return;
+	}
+
+	// 2. 재진입 가드 — 이미 기상 중이면 return.
+	// 기상 구간에도 KnockdownHit 태그가 유지되므로 IsKnockedDown()만으로는 막을 수 없다.
+	// 재진입을 허용하면 Montage_SetEndDelegate 교체로 종료 콜백이 유실되어 입력이 영구히 잠긴다.
+	if (bIsGettingUp)
+	{
+		return;
+	}
+
+	bIsGettingUp = true;
+
+	// 3. 사망 중이면 기상 연출 없이 즉시 종료 처리로 넘긴다.
+	if (bIsDead)
+	{
+		EndGetUp();
+		return;
+	}
+
+	// 4. 기상 몽타주 재생 — 이 구간에도 KnockdownHit 태그와 입력 잠금은 그대로 유지한다.
+	//    입력 복원은 기상 완료(EndGetUp) 시점에만 일어난다.
+	UAnimInstance* AnimInstance = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr;
+	if (!AnimInstance || !GetUpMontage)
+	{
+		// 기상 몽타주 미지정 — 연출 없이 즉시 입력을 돌려준다(입력 먹통 방지).
+		EndGetUp();
+		return;
+	}
+
+	const float Length = AnimInstance->Montage_Play(GetUpMontage);
+	if (Length > 0.f)
+	{
+		FOnMontageEnded EndDelegate;
+		EndDelegate.BindUObject(this, &ABWPlayerCharacter::OnGetUpMontageEnded);
+		AnimInstance->Montage_SetEndDelegate(EndDelegate, GetUpMontage);
+	}
+	else
+	{
+		// 재생 실패 — 입력 먹통 방지를 위해 즉시 복원(PlayKnockdownReaction의 실패 처리와 동일 정책).
+		EndGetUp();
+	}
+}
+
+void ABWPlayerCharacter::EndGetUp()
+{
+	// 이미 종료되었으면 중복 복원하지 않는다(입력 카운터 언더플로 방지).
+	// 이 가드가 입력 잠금/복원이 정확히 1쌍으로만 일어나도록 보장한다.
+	if (!IsKnockedDown())
+	{
+		return;
+	}
+
+	bIsGettingUp = false;
+
+	// KnockdownHit 태그 해제 → StateComponent가 행동 상태 부재를 감지해 Normal로 자동 복귀.
+	if (IsValid(StateComponent))
+	{
+		StateComponent->RemoveStateTag(BWGameplayTags::Character_State_KnockdownHit.GetTag());
+	}
+
+	// 사망 처리(EnableDeathState)가 잠근 입력을 유지해야 하므로 사망 시 복원하지 않는다.
+	if (!bIsDead)
+	{
+		SetInputLocked(false);
+	}
+}
+
+void ABWPlayerCharacter::OnKnockdownMontageEnded(UAnimMontage* /*Montage*/, bool bInterrupted)
+{
+	// 이미 기상 구간에 진입했다면 무시한다.
+	// BlendingOut 콜백에서 기상 몽타주를 재생하면 넉다운 몽타주의 End 콜백이 뒤이어
+	// bInterrupted=true로 호출되므로, 여기서 막지 않으면 기상 도중에 상태가 풀린다.
+	// AnimNotify가 먼저 EndKnockdown을 호출한 경우도 이 가드가 처리한다.
+	if (bIsGettingUp)
+	{
+		return;
+	}
+
+	if (bInterrupted)
+	{
+		// 다른 몽타주(사망 등)가 넉다운을 밀어냈다 — 그 몽타주가 포즈를 소유하므로
+		// 기상 몽타주를 덧씌우지 않고 상태만 해제한다.
+		EndGetUp();
+		return;
+	}
+
+	// 정상 종료(블렌드 아웃 시작) — 기상 구간으로 진입시킨다.
+	EndKnockdown();
+}
+
+void ABWPlayerCharacter::OnGetUpMontageEnded(UAnimMontage* /*Montage*/, bool /*bInterrupted*/)
+{
+	// 정상 종료든 중단이든 넉다운 사이클을 확실히 종료한다(안전망).
+	// AnimNotify가 회복 프레임에서 이미 EndGetUp을 호출했다면
+	// EndGetUp 내부의 IsKnockedDown() 가드가 중복 복원을 막는다.
+	EndGetUp();
 }
