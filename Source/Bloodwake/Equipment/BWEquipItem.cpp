@@ -3,6 +3,7 @@
 #include "Equipment/BWEquipItem.h"
 
 #include "Components/StaticMeshComponent.h"
+#include "Engine/Texture2D.h"
 
 ABWEquipItem::ABWEquipItem()
 {
@@ -90,4 +91,9 @@ void ABWEquipItem::DropFromCharacter(FName CollisionProfileName)
 	MeshComponent->SetCollisionProfileName(CollisionProfileName);
 	MeshComponent->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	MeshComponent->SetSimulatePhysics(true);
+}
+
+UTexture2D* ABWEquipItem::GetItemIcon() const
+{
+	return ItemIcon.Get();
 }

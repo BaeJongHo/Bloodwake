@@ -7,6 +7,7 @@
 #include "BWEnemy_Boss.generated.h"
 
 class UBWBossHealthBarWidget;
+class USoundBase;
 
 /**
  * 소울라이크 보스 캐릭터 C++ 베이스 클래스. ABWEnemy를 상속한다.
@@ -71,10 +72,41 @@ private:
 	void DropEquippedWeapon();
 
 	/**
+	 * UBWBossMusicSubsystem에 BGM 재생을 요청한다.
+	 * BossBGM이 null이거나 서브시스템을 찾을 수 없으면 경고 후 무동작.
+	 * ShowHealthBar() 말미에서 호출된다.
+	 */
+	void StartBossBGM();
+
+	/**
+	 * UBWBossMusicSubsystem에 BGM 정지를 요청한다.
+	 * 이미 정지 상태이거나 서브시스템을 찾을 수 없으면 조용히 무시.
+	 * HideHealthBar(), EnableRagdoll(), EndPlay()에서 호출된다.
+	 */
+	void StopBossBGM();
+
+	/**
 	 * 최초 노출 시 BossHealthBarWidgetClass로 위젯 인스턴스를 생성하고
 	 * AddToViewport + InitializeForBoss를 수행한다. 이미 유효하면 즉시 반환.
 	 */
 	void EnsureBossHealthBar();
+
+	// ── BP 설정용 — 보스 BGM ─────────────────────────────────────────────────
+
+	/**
+	 * 전투 돌입 시 재생할 보스 BGM 에셋.
+	 * BP 자식(BP_Boss)에서 SC_ 또는 SW_ 에셋을 지정한다. null이면 BGM 재생 없음.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Boss|Audio", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USoundBase> BossBGM;
+
+	/** BGM 페이드인 시간(초). 기본 1.0초. BP 자식에서 조정 가능. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Boss|Audio", meta = (AllowPrivateAccess = "true", ClampMin = "0.0"))
+	float BGMFadeInDuration = 1.0f;
+
+	/** BGM 페이드아웃 시간(초). 기본 1.5초. BP 자식에서 조정 가능. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Boss|Audio", meta = (AllowPrivateAccess = "true", ClampMin = "0.0"))
+	float BGMFadeOutDuration = 1.5f;
 
 	// ── BP 설정용 — 2D 보스 체력바 ───────────────────────────────────────────
 

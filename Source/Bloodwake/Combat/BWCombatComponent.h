@@ -22,6 +22,10 @@ class UDataTable;
 class ACharacter;
 enum class EBWArmourType : uint8;
 
+// 장비 슬롯 변경 시 HUD 갱신용. 인자: 변경된 슬롯, 새 장비 인스턴스(해제 시 nullptr).
+// BWPotionInventoryComponent.h:14의 FBWOnUpdatePotionAmount 패턴과 동일.
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FBWOnEquipmentChanged, EBWEquipSlot, Slot, ABWEquipItem*, NewItem);
+
 /**
  * 소유 캐릭터의 장비 인스턴스 보유 및 장착/해제/뽑기/넣기 로직을 담당하는 컴포넌트.
  * 소켓 부착의 단일 진입점으로, 플레이어·적·보스가 재사용할 수 있다.
@@ -121,6 +125,20 @@ public:
 	 */
 	UFUNCTION(BlueprintPure, Category = "Combat|Collision")
 	UBWWeaponCollisionComponent* GetCollisionForSlot(EBWWeaponSlotSelector Slot) const;
+
+	// ── 장비 변경 델리게이트 ─────────────────────────────────────────────
+
+	/** 무기/방패 슬롯의 장비가 교체될 때 브로드캐스트한다. HUD 장비 위젯이 구독한다. */
+	UPROPERTY(BlueprintAssignable, Category = "Combat|Equipment")
+	FBWOnEquipmentChanged OnEquipmentChanged;
+
+	/**
+	 * 현재 무기/방패 슬롯 상태를 OnEquipmentChanged로 다시 브로드캐스트한다.
+	 * HUD가 뒤늦게 구독했을 때 초기 동기화에 사용한다(UBWPotionInventoryComponent::BroadcastPotionUpdate와 동일 역할).
+	 * Weapon·Shield 슬롯 각각 1회 Broadcast한다.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Combat|Equipment")
+	void BroadcastEquipmentState();
 
 protected:
 	// ── 소켓명 (캐릭터 스켈레톤 본 이름, BP 자식에서 실제 값 지정) ────

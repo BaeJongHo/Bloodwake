@@ -309,6 +309,14 @@ void ABWPlayerCharacter::PerformAttack(EBWAttackType AttackType, FOnMontageEnded
 	}
 }
 
+void ABWPlayerCharacter::SetInvincible(bool bInInvincible)
+{
+	bIsInvincible = bInInvincible;
+	// Verbose 이하로 두어 쉬핑 빌드에서 비용 0(CLAUDE.md 4.3).
+	UE_LOG(LogTemp, Verbose, TEXT("[BWPlayerCharacter] SetInvincible: %s"),
+		bInInvincible ? TEXT("ON") : TEXT("OFF"));
+}
+
 // ── TakeDamage 오버라이드 ─────────────────────────────────────────────────────
 
 float ABWPlayerCharacter::TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent,
@@ -316,6 +324,14 @@ float ABWPlayerCharacter::TakeDamage(float DamageAmount, const FDamageEvent& Dam
 {
 	// 이미 사망한 플레이어는 추가 타격을 무시한다.
 	if (bIsDead)
+	{
+		return 0.f;
+	}
+
+	// 무적(i-frame) 구간이면 데미지·히트 리액션·이펙트를 전부 건너뛴다.
+	// Super::TakeDamage 이전에 반환해야 AttributeComponent 차감과 AI 피격 인지(UAISense_Damage)가
+	// 모두 발생하지 않는다. 이후에 두면 구르기로 회피했는데 적이 어그로를 잡는 버그가 발생한다.
+	if (bIsInvincible)
 	{
 		return 0.f;
 	}
@@ -876,6 +892,10 @@ void ABWPlayerCharacter::OnRollMontageEnded(UAnimMontage* Montage, bool bInterru
 {
 	// 정상 종료(노티파이가 이미 EndRoll 했을 수 있음)든 중단이든 Roll 상태를 확실히 해제한다.
 	EndRoll();
+
+	// 이중 안전망: EndRoll에서 이미 해제했지만, 몽타주 종료(정상/중단 양쪽 모두 보장)에서 한번 더 확실히 해제한다.
+	// EndRoll이 먼저 해제했다면 이미 false이므로 무해한 중복 대입.
+	bIsInvincible = false;
 }
 
 void ABWPlayerCharacter::EndRoll()
@@ -898,6 +918,10 @@ void ABWPlayerCharacter::EndRoll()
 			bUseControllerRotationYaw = true;
 		}
 	}
+
+	// 안전망: 구르기 종료 시 무적을 강제 해제한다.
+	// Montage_Stop 등으로 NotifyEnd가 누락됐을 때 무적이 영구히 켜진 채로 남는 것을 방지(최우선 안전장치).
+	bIsInvincible = false;
 }
 
 FVector ABWPlayerCharacter::GetRollInputDirection() const

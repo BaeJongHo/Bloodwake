@@ -5,6 +5,7 @@
 #include "Blueprint/UserWidget.h"
 #include "Character/BWPlayerCharacter.h"
 #include "Combat/BWAttributeComponent.h"
+#include "Combat/BWCombatComponent.h"
 #include "Combat/BWPotionInventoryComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "Player/BWPlayerController.h"
@@ -89,5 +90,11 @@ void ABWGameMode::InitializeHUD()
 		UE_LOG(LogTemp, Warning, TEXT("ABWGameMode::InitializeHUD — PotionInventoryComponent가 유효하지 않습니다. 포션 HUD가 갱신되지 않습니다."));
 	}
 
-	MainHUDWidget->InitializeForPlayer(Attributes, PotionInventory);
+	UBWCombatComponent* CombatComp = PlayerCharacter->GetCombatComponent();
+	if (!IsValid(CombatComp))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("ABWGameMode::InitializeHUD — CombatComponent가 유효하지 않습니다. 장비 HUD가 갱신되지 않습니다."));
+	}
+
+	MainHUDWidget->InitializeForPlayer(Attributes, PotionInventory, CombatComp);
 }

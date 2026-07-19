@@ -34,4 +34,19 @@ public:
 	 * OnEnded를 값으로 받는다 — Montage_SetEndDelegate가 비const 참조를 요구하므로.
 	 */
 	virtual void PerformAttack(EBWAttackType AttackType, FOnMontageEnded OnEnded) = 0;
+
+	/**
+	 * 현재 무적(i-frame) 상태인지 반환한다.
+	 * TakeDamage 최상단에서 조기 반환 판정에 사용한다.
+	 * 기본 구현은 false — 무적을 지원하지 않는 구현체는 오버라이드하지 않아도 된다.
+	 * 순수 가상으로 두지 않는다 — ABWEnemy 계열 전부가 즉시 컴파일 에러가 되기 때문.
+	 */
+	virtual bool IsInvincible() const { return false; }
+
+	/**
+	 * 무적 상태를 설정한다. UBWAnimNotifyState_Invincibility가 몽타주 윈도우 진입/이탈 시 호출한다.
+	 * 기본 구현은 무동작 — 무적을 지원하는 구현체(ABWPlayerCharacter)만 오버라이드한다.
+	 * 향후 보스 회피 i-frame이 필요할 때 ABWEnemy에 동일 오버라이드를 추가하는 것으로 확장된다.
+	 */
+	virtual void SetInvincible(bool bInInvincible) {}
 };

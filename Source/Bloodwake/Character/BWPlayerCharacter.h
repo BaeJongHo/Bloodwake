@@ -61,6 +61,19 @@ public:
 	 */
 	virtual void PerformAttack(EBWAttackType AttackType, FOnMontageEnded OnEnded) override;
 
+	/**
+	 * 현재 무적(i-frame) 상태인지 반환한다. IBWCombatInterface 구현.
+	 * bIsInvincible이 true이면 TakeDamage가 Super::TakeDamage 이전에 조기 반환한다.
+	 */
+	virtual bool IsInvincible() const override { return bIsInvincible; }
+
+	/**
+	 * 무적 상태를 설정한다. IBWCombatInterface 구현.
+	 * UBWAnimNotifyState_Invincibility가 구르기 몽타주 윈도우 진입/이탈 시 호출한다.
+	 * Verbose 로그 포함 — 쉬핑 빌드에서 비용 0(CLAUDE.md 4.3).
+	 */
+	virtual void SetInvincible(bool bInInvincible) override;
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -76,6 +89,10 @@ public:
 	/** PotionInventoryComponent 접근자. GameMode에서 HUD 델리게이트 배선에 사용한다. */
 	UFUNCTION(BlueprintPure, Category = "Combat")
 	UBWPotionInventoryComponent* GetPotionInventoryComponent() const { return PotionInventoryComponent; }
+
+	/** CombatComponent 접근자. GameMode가 HUD 장비 위젯 델리게이트 배선에 사용한다. */
+	UFUNCTION(BlueprintPure, Category = "Combat")
+	UBWCombatComponent* GetCombatComponent() const { return CombatComponent; }
 
 	/**
 	 * 포션 마시기 진행 중 피격 시 중단 처리.
@@ -661,6 +678,15 @@ protected:
 	TObjectPtr<UAnimMontage> DeathMontage;
 
 	// ── 런타임 상태 ─────────────────────────────────────────────────
+
+	/**
+	 * 무적(i-frame) 상태 여부. true이면 TakeDamage가 데미지·히트 리액션·이펙트 없이 조기 반환한다.
+	 * UBWAnimNotifyState_Invincibility가 구르기 몽타주 윈도우에서 ON/OFF 한다.
+	 * 코드가 소유하는 런타임 상태 — 디버깅 관찰용으로만 노출.
+	 * 안전망: EndRoll / OnRollMontageEnded에서도 강제 해제해 영구 무적을 방지한다.
+	 */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Combat|Invincibility")
+	bool bIsInvincible = false;
 
 	/** 사망 여부. TakeDamage 재진입 차단 및 HandleDeath 중복 진입 방지. */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Player|Death")

@@ -2,6 +2,7 @@
 
 #include "Character/BWEnemy_Boss.h"
 
+#include "Audio/BWBossMusicSubsystem.h"
 #include "Blueprint/UserWidget.h"
 #include "GameFramework/PlayerController.h"
 #include "UI/BWBossHealthBarWidget.h"
@@ -43,6 +44,11 @@ void ABWEnemy_Boss::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		BossHealthBarInstance = nullptr;
 	}
 
+	// PIE 종료·레벨 전환 시 BGM을 즉시 정지한다(페이드 없이 Stop — Deinitialize보다 먼저 처리).
+	// UBWBossMusicSubsystem::Deinitialize도 Stop을 호출하지만, EndPlay 시점에 먼저 정리하면
+	// PIE 재시작 시 오디오 컴포넌트 댕글링을 방지할 수 있다.
+	StopBossBGM();
+
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -56,6 +62,9 @@ void ABWEnemy_Boss::ShowHealthBar()
 		// HitTestInvisible: 화면에 표시되지만 마우스 클릭을 통과시킨다(전투 UI 비간섭).
 		BossHealthBarInstance->SetVisibility(ESlateVisibility::HitTestInvisible);
 	}
+
+	// 보스와 전투 돌입 시 BGM을 재생한다.
+	StartBossBGM();
 }
 
 void ABWEnemy_Boss::HideHealthBar()
@@ -66,6 +75,9 @@ void ABWEnemy_Boss::HideHealthBar()
 		// Collapsed: 파괴하지 않고 숨김 — 시야 복귀 시 재노출 가능.
 		BossHealthBarInstance->SetVisibility(ESlateVisibility::Collapsed);
 	}
+
+	// 시야를 잃으면 BGM을 정지한다.
+	StopBossBGM();
 }
 
 void ABWEnemy_Boss::EnableRagdoll()
@@ -80,7 +92,10 @@ void ABWEnemy_Boss::EnableRagdoll()
 		BossHealthBarInstance = nullptr;
 	}
 
-	// 3) 부모 랙돌 처리 (bIsDead·Death 태그·랙돌·CorpseLifeSpan 등 공통 사망 처리).
+	// 3) 사망 시 BGM을 정지한다 — Super::EnableRagdoll() 전에 호출해 페이드아웃이 시작되도록 한다.
+	StopBossBGM();
+
+	// 4) 부모 랙돌 처리 (bIsDead·Death 태그·랙돌·CorpseLifeSpan 등 공통 사망 처리).
 	//    부모 EnableRagdoll의 HealthBarWidget.HideBar()는 BeginPlay에서 파괴(nullptr)되었으므로
 	//    IsValid(HealthBarWidget) == false → 안전하게 무동작.
 	Super::EnableRagdoll();
@@ -109,6 +124,48 @@ void ABWEnemy_Boss::DropEquippedWeapon()
 	{
 		Weapon->SetLifeSpan(DroppedWeaponLifeSpan);
 	}
+}
+
+void ABWEnemy_Boss::StartBossBGM()
+{
+	if (!IsValid(BossBGM))
+	{
+		// BP_Boss에서 BossBGM 에셋을 지정하지 않았으면 조용히 무시한다.
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	UBWBossMusicSubsystem* MusicSubsystem = World->GetSubsystem<UBWBossMusicSubsystem>();
+	if (!IsValid(MusicSubsystem))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[ABWEnemy_Boss] StartBossBGM: UBWBossMusicSubsystem을 찾을 수 없습니다. (%s)"), *GetName());
+		return;
+	}
+
+	MusicSubsystem->PlayBossMusic(BossBGM, this, BGMFadeInDuration);
+}
+
+void ABWEnemy_Boss::StopBossBGM()
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	UBWBossMusicSubsystem* MusicSubsystem = World->GetSubsystem<UBWBossMusicSubsystem>();
+	if (!IsValid(MusicSubsystem))
+	{
+		// 서브시스템이 없으면(예: 이미 월드 해제 중) 조용히 무시한다.
+		return;
+	}
+
+	MusicSubsystem->StopBossMusic(this, BGMFadeOutDuration);
 }
 
 void ABWEnemy_Boss::EnsureBossHealthBar()

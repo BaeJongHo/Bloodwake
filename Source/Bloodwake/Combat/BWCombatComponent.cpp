@@ -59,6 +59,11 @@ void UBWCombatComponent::BeginPlay()
 		EquipNewItem(DefaultEquipItemClass, FTransform::Identity);
 	}
 
+	// 기본 장비 장착 완료 후 장비 상태를 브로드캐스트한다.
+	// HUD는 다음 틱(GameMode::InitializeHUD)에 구독하므로 이 시점엔 수신자가 없지만,
+	// HUD가 InitializeForPlayer에서 BroadcastEquipmentState를 재호출해 초기 동기화를 보장한다.
+	BroadcastEquipmentState();
+
 	// 초기 전투 상태 설정 — 무기는 항상 등부터 시작하므로 초기엔 MeleeFists.
 	RefreshCombatState();
 }
@@ -181,6 +186,9 @@ bool UBWCombatComponent::EquipNewItem(TSubclassOf<ABWEquipItem> InEquipItemClass
 		Slot == EBWEquipSlot::Weapon ? TEXT("Weapon") : TEXT("Shield"),
 		*NewItem->GetName());
 
+	// 장비 교체 완료 — HUD 장비 위젯에 변경을 알린다.
+	OnEquipmentChanged.Broadcast(Slot, SlotItemRef.Get());
+
 	return true;
 }
 
@@ -255,6 +263,14 @@ void UBWCombatComponent::AttachSlotToSocket(EBWEquipSlot Slot, EBWAttachDestinat
 UBWWeaponCollisionComponent* UBWCombatComponent::GetCollisionForSlot(EBWWeaponSlotSelector Slot) const
 {
 	return (Slot == EBWWeaponSlotSelector::Second) ? SecondCollision.Get() : MainCollision.Get();
+}
+
+void UBWCombatComponent::BroadcastEquipmentState()
+{
+	// Weapon · Shield 슬롯 각각 1회 브로드캐스트한다.
+	// 빈 슬롯(nullptr)이면 HUD 위젯이 ClearEquipmentIcon을 호출해 빈 슬롯을 표시한다.
+	OnEquipmentChanged.Broadcast(EBWEquipSlot::Weapon, EquippedWeapon.Get());
+	OnEquipmentChanged.Broadcast(EBWEquipSlot::Shield, EquippedShield.Get());
 }
 
 // ── private 헬퍼 ─────────────────────────────────────────────────────────────

@@ -10,6 +10,7 @@ class UStaticMeshComponent;
 class UStaticMesh;
 class USkeletalMeshComponent;
 class USkeletalMesh;
+class UTexture2D;
 
 /**
  * 장비가 장착될 슬롯 식별자.
@@ -105,6 +106,14 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Equipment")
 	virtual USkeletalMesh* GetDisplaySkeletalMesh() const;
 
+	/**
+	 * HUD 장비 슬롯에 표시할 아이콘 텍스처를 반환한다. 없으면 nullptr.
+	 * ItemIcon이 protected이므로 위젯·HUD 등 외부 접근용 접근자.
+	 * CDO에서도 안전하게 호출 가능하다(GetDisplayStaticMesh와 동일 계약).
+	 */
+	UFUNCTION(BlueprintPure, Category = "Equipment")
+	UTexture2D* GetItemIcon() const;
+
 protected:
 	/** 장비 외형 메시. BP 자식의 디테일 패널에서 SM_ 에셋을 지정한다. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Equipment")
@@ -113,6 +122,15 @@ protected:
 	/** UI 표시명. BP 자식에서 설정한다. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Equipment")
 	FText DisplayName;
+
+	/**
+	 * HUD 장비 슬롯에 표시할 아이콘 텍스처.
+	 * BP 자식(BP_Weapon_..., BP_Shield_...)에서 T_ 아이콘 에셋을 지정한다.
+	 * null이면 위젯이 아이콘을 비운다(빈 슬롯 표시).
+	 * ※ 표시용 UImage 위젯은 UBWEquipmentWidget이 보유한다 — 데이터(텍스처)와 표시(위젯)를 분리한다.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Equipment")
+	TObjectPtr<UTexture2D> ItemIcon;
 
 	/**
 	 * 장비 메시 쪽 부착 보정용 소켓명(선택).

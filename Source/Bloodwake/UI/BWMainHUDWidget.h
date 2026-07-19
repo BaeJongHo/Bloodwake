@@ -10,6 +10,10 @@ class UProgressBar;
 class UBWAttributeComponent;
 class UBWPotionInventoryComponent;
 class UBWPotionWidget;
+class UBWEquipmentWidget;
+class UBWCombatComponent;
+class ABWEquipItem;
+enum class EBWEquipSlot : uint8;
 
 /**
  * 플레이어 메인 HUD 위젯의 C++ 베이스 클래스.
@@ -24,12 +28,14 @@ class BLOODWAKE_API UBWMainHUDWidget : public UUserWidget
 
 public:
 	/**
-	 * AttributeComponent 및 PotionInventoryComponent를 구독하고 현재값으로 위젯을 초기화한다.
+	 * AttributeComponent / PotionInventoryComponent / CombatComponent를 구독하고 현재값으로 위젯을 초기화한다.
 	 * ABWGameMode::InitializeHUD(다음 틱)에서 호출한다.
-	 * InPotionInventory가 null이면 포션 구독만 건너뛴다(Attribute 구독은 유지).
+	 * 각 인자가 null이면 해당 구독만 건너뛴다(나머지 구독은 유지).
 	 */
 	UFUNCTION(BlueprintCallable, Category = "HUD")
-	void InitializeForPlayer(UBWAttributeComponent* InAttributes, UBWPotionInventoryComponent* InPotionInventory);
+	void InitializeForPlayer(UBWAttributeComponent* InAttributes,
+	                         UBWPotionInventoryComponent* InPotionInventory,
+	                         UBWCombatComponent* InCombatComponent);
 
 protected:
 	virtual void NativeConstruct() override;
@@ -50,6 +56,13 @@ protected:
 	UFUNCTION()
 	void OnPotionQuantityChanged(int32 InAmount);
 
+	/**
+	 * 장비 변경 델리게이트 콜백. 슬롯에 따라 해당 위젯의 아이콘을 갱신한다.
+	 * UFUNCTION 필수 — AddDynamic 요구(없으면 조용히 바인딩 실패, CLAUDE.md 델리게이트 규약).
+	 */
+	UFUNCTION()
+	void OnEquipmentChangedCallback(EBWEquipSlot InSlot, ABWEquipItem* NewItem);
+
 private:
 	/** ProgressBar의 퍼센트를 설정한다. MaxValue == 0이면 0으로 세팅(0-division 가드). */
 	void SetBarPercent(UProgressBar* Bar, float Value, float Max);
@@ -69,6 +82,20 @@ private:
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UBWPotionWidget> PotionWidget;
 
+	/**
+	 * 무기 슬롯 아이콘 위젯. WBP_MainHUD 자식에서 이름이 정확히 "WeaponEquipmentWidget"인
+	 * WBP_Equipment 인스턴스를 배치해야 한다(BindWidget 매칭).
+	 */
+	UPROPERTY(meta = (BindWidget))
+	TObjectPtr<UBWEquipmentWidget> WeaponEquipmentWidget;
+
+	/**
+	 * 방패 슬롯 아이콘 위젯. WBP_MainHUD 자식에서 이름이 정확히 "ShieldEquipmentWidget"인
+	 * WBP_Equipment 인스턴스를 배치해야 한다(BindWidget 매칭).
+	 */
+	UPROPERTY(meta = (BindWidget))
+	TObjectPtr<UBWEquipmentWidget> ShieldEquipmentWidget;
+
 	// ── 캐시 ────────────────────────────────────────────────────────
 
 	/** 구독 중인 AttributeComponent 참조. NativeDestruct에서 RemoveDynamic 정리. */
@@ -78,4 +105,8 @@ private:
 	/** 구독 중인 PotionInventoryComponent 참조. NativeDestruct에서 RemoveDynamic 정리. */
 	UPROPERTY(Transient)
 	TObjectPtr<UBWPotionInventoryComponent> BoundPotionInventory;
+
+	/** 구독 중인 CombatComponent 참조. NativeDestruct에서 RemoveDynamic 정리(댕글링 콜백 방지). */
+	UPROPERTY(Transient)
+	TObjectPtr<UBWCombatComponent> BoundCombatComponent;
 };
